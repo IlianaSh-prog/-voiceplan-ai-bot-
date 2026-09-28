@@ -20,7 +20,6 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"VoicePlan AI Enterprise Server is Live!")
 
     def log_message(self, *args):
-        # Отключаем спам логами сервера в консоль
         return
 
 def run_server():
@@ -28,28 +27,23 @@ def run_server():
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     server.serve_forever()
 
-# Запуск веб-сервера в отдельном потоке
 threading.Thread(target=run_server, daemon=True).start()
 
 # =====================================================================
-# 2. КОНФИГУРАЦИЯ И КЛЮЧИ ДОСТУПА
+# 2. КОНФИГУРАЦИЯ И СЛОВАРИ ЯЗЫКОВ
 # =====================================================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 AI_API_KEY = os.environ.get("AI_API_KEY") 
 AI_BASE_URL = os.environ.get("AI_BASE_URL", "https://api.proxyapi.ru/openai/v1")
 
-# Настройки ЮKassa (При подключении боевого магазина)
-YOOKASSA_SHOP_ID = os.environ.get("YOOKASSA_SHOP_ID", "123456")
-YOOKASSA_SECRET_KEY = os.environ.get("YOOKASSA_SECRET_KEY", "test_secret_key")
+# ⚠️ УКАЖИТЕ ВАШ ЛИЧНЫЙ ТЕЛЕГРАМ ID (Можно узнать у бота @userinfobot)
+ADMIN_ID = 8725167633 
 
-# ⚠️ УКАЖИТЕ ВАШ ЛИЧНЫЙ ТЕЛЕГРАМ ID (Узнать можно у @userinfobot)
-ADMIN_ID = 8725167633
-
-# Ссылка на вашу оферту на Telegra.ph
+# Ссылка на вашу оферту
 OFFER_URL = "https://telegra.ph" 
 
 if not TELEGRAM_TOKEN:
-    print("[CRITICAL ERROR] Не задан TELEGRAM_BOT_TOKEN в Environment Variables!")
+    print("[CRITICAL ERROR] Не задан TELEGRAM_BOT_TOKEN!")
     sys.exit(1)
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True)
@@ -60,9 +54,6 @@ SYSTEM_CATEGORIES_EN = ["🔴 Urgent", "📅 Calendar", "🛒 Groceries", "💡 
 
 user_states = {}
 
-# =====================================================================
-# 3. МУЛЬТИЯЗЫЧНЫЙ СЛОВАРЬ ИНТЕРФЕЙСА (i18n)
-# =====================================================================
 LANGS = {
     'ru': {
         'welcome': (
@@ -81,21 +72,19 @@ LANGS = {
         'btn_lang': "🌐 Язык / Language",
         'empty_tasks': "📭 **Ваш список задач пуст!**\nНаговорите голосовое сообщение, чтобы добавить первые дела.",
         'dash_title': "📋 **ВАША ИНТЕРАКТИВНАЯ ТАБЛИЦА ДЕЛ:**\n──────────────────────────\n",
-        'status_done': "Готово",
-        'status_todo': "В работе",
         'btn_done': "✅ Сделано",
         'btn_undone': "↩️ Вернуть",
-        'folders_title': "📂 **Ваши рабочие папки:**\n\n",
-        'folders_hint': "_Просто наговорите задачу голосом, и ИИ сам выберет нужную папку!_",
+        'folders_title': "📂 **ЗАДАЧИ ПО ПАПКАМ:**\n\n",
+        'folders_empty': "Папки пока пусты. Наговорите или напишите задачи!",
         'new_cat_prompt': "✍️ **Введите название новой папки с эмодзи:**\n*(Например: 🚗 Автомобиль, 👶 Дети или 🏢 Проект)*",
         'new_cat_success': "✅ Категория **«{cat}»** успешно добавлена!",
-        'support_text': "💬 **Служба поддержки VoicePlan AI**\n\nЕсли у вас возникли вопросы, предложения или проблемы с оплатой, напишите нашему администратору: @[Ваш_Логин]",
+        'support_text': "💬 **Служба поддержки VoicePlan AI**\n\nЕсли у вас возникли вопросы, напишите нашему администратору: @[Ваш_Логин]",
         'limits_text': (
             "⭐ **ВАШ ТАРИФ И ВОЗМОЖНОСТИ**\n\n"
             "Статус: **{status}**\n"
             "🎙 Оставшиеся бесплатные разборы: **{free} шт.**\n\n"
             "✨ **Преимущества Premium:**\n"
-            "• Безлимитный ИИ-разбор голосовых заметок любой длины.\n"
+            "• Безлимитный ИИ-разбор голосовых заметок.\n"
             "• Голосовое закрытие задач прямо на лету.\n"
             "• Неограниченное число своих папок.\n\n"
             "📄 [Публичная оферта сервиса]({offer})"
@@ -107,9 +96,9 @@ LANGS = {
             "👋 **Hello, {name}!**\n\n"
             "I am your personal **AI Organizer «VoicePlan AI»**.\n\n"
             "🎙 **How to use me:**\n"
-            "Just send a voice note with any chaotic stream of thoughts. I will remove filler words, "
-            "categorize your tasks, and build a neat board!\n\n"
-            "🎁 Free voice trials given: **5 pcs**."
+            "Just send a voice note with your thoughts. I will remove filler words, "
+            "categorize tasks, and build an interactive table!\n\n"
+            "🎁 Free trials given: **5 pcs**."
         ),
         'btn_tasks': "📊 My Task Board",
         'btn_folders': "📂 Folders",
@@ -117,24 +106,22 @@ LANGS = {
         'btn_prem': "⭐ Premium & Limits",
         'btn_support': "💬 Support",
         'btn_lang': "🌐 Language / Язык",
-        'empty_tasks': "📭 **Your task list is empty!**\nSend a voice note to capture your first tasks.",
+        'empty_tasks': "📭 **Your task list is empty!**\nSend a voice note to add some tasks.",
         'dash_title': "📋 **YOUR INTERACTIVE TASK BOARD:**\n──────────────────────────\n",
-        'status_done': "Done",
-        'status_todo': "In Progress",
         'btn_done': "✅ Done",
         'btn_undone': "↩️ Reopen",
-        'folders_title': "📂 **Your active folders:**\n\n",
-        'folders_hint': "_Just speak your mind, and AI will auto-sort tasks into the right folder!_",
-        'new_cat_prompt': "✍️ **Type a name for the new folder with an emoji:**\n*(Example: 🚗 Car, 👶 Kids, 🏢 Project)*",
-        'new_cat_success': "✅ Category **«{cat}»** successfully created!",
-        'support_text': "💬 **VoicePlan AI Support**\n\nIf you have any questions or issues with payments, please contact our manager: @[Your_Username]",
+        'folders_title': "📂 **TASKS BY FOLDERS:**\n\n",
+        'folders_empty': "Your folders are empty. Send voice or text tasks!",
+        'new_cat_prompt': "✍️ **Type a folder name with an emoji:**\n*(Example: 🚗 Car, 👶 Kids, 🏢 Project)*",
+        'new_cat_success': "✅ Category **«{cat}»** created!",
+        'support_text': "💬 **VoicePlan AI Support**\n\nIf you have any questions, please write to our support: @[Your_Username]",
         'limits_text': (
             "⭐ **YOUR PLAN & LIMITS**\n\n"
             "Status: **{status}**\n"
             "🎙 Free voice notes remaining: **{free} pcs**\n\n"
             "✨ **Premium Perks:**\n"
-            "• Unlimited voice processing of any length.\n"
-            "• Voice-based task completion on the fly.\n"
+            "• Unlimited voice processing.\n"
+            "• Voice-based task completion.\n"
             "• Unlimited custom categories.\n\n"
             "📄 [Public Offer Agreement]({offer})"
         ),
@@ -148,10 +135,10 @@ def get_text(uid, key, **kwargs):
     return text_template.format(**kwargs)
 
 # =====================================================================
-# 4. БАЗА ДАННЫХ SQLITE (СТРУКТУРА)
+# 3. БАЗА ДАННЫХ
 # =====================================================================
 def get_db():
-    conn = sqlite3.connect("voiceplan_v4_2.db", timeout=60.0)
+    conn = sqlite3.connect("voiceplan_v4_3.db", timeout=60.0)
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
@@ -159,8 +146,6 @@ def init_db():
     with db_lock:
         conn = get_db()
         c = conn.cursor()
-        
-        # Таблица пользователей
         c.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -172,8 +157,6 @@ def init_db():
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
-        # Таблица личных категорий
         c.execute('''
             CREATE TABLE IF NOT EXISTS custom_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -181,8 +164,6 @@ def init_db():
                 category_name TEXT
             )
         ''')
-        
-        # Таблица задач
         c.execute('''
             CREATE TABLE IF NOT EXISTS tasks (
                 task_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -193,19 +174,14 @@ def init_db():
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
-        # Таблица платежей (Аналитика)
         c.execute('''
             CREATE TABLE IF NOT EXISTS payments (
                 payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
-                amount_rub REAL DEFAULT 0.0,
                 amount_stars INTEGER DEFAULT 0,
-                payment_system TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
         conn.commit()
         conn.close()
 
@@ -270,7 +246,7 @@ def get_user_categories(uid):
     return sys_cats + custom
 
 # =====================================================================
-# 5. ГЛАВНОЕ МЕНЮ И ОБРАБОТКА КОМАНД
+# 4. КНОПКИ И ГЛАВНОЕ МЕНЮ
 # =====================================================================
 def get_main_keyboard(uid):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -322,20 +298,8 @@ def cmd_support(message):
 def cmd_lang(message):
     change_language_menu(message)
 
-@bot.message_handler(commands=['help'])
-def cmd_help(message):
-    uid = message.from_user.id
-    help_text = (
-        "📖 **Инструкция по работе с VoicePlan AI:**\n\n"
-        "1. **Зажмите микрофон** и наговорите дела в свободной форме.\n"
-        "2. Бот автоматически очистит текст и разложит задачи по папкам.\n"
-        "3. **Чтобы закрыть задачу:** нажмите кнопку под таблицей ИЛИ просто наговорите голосом: *«Я сделала закупку»*.\n"
-        "4. **Свои папки:** нажимайте кнопку `➕ Новая категория`."
-    )
-    bot.send_message(uid, help_text, parse_mode="Markdown")
-
 # =====================================================================
-# 6. ИНТЕРАКТИВНАЯ ТАБЛИЦА ЗАДАЧ (🟢/🔴 СВЕТОФОР)
+# 5. ТАБЛИЦА СВЕТОФОР (🔴 / 🟢) И ФУНКЦИЯ «ПО ПАПКАМ»
 # =====================================================================
 def build_task_dashboard(uid):
     with db_lock:
@@ -351,7 +315,7 @@ def build_task_dashboard(uid):
     if not rows:
         return get_text(uid, 'empty_tasks'), None
 
-    text = get_text(uid, 'dash_title')
+    text = get_text(uid, 'dash_title') + "──────────────────────────\n"
     markup = types.InlineKeyboardMarkup(row_width=1)
     
     current_cat = None
@@ -361,13 +325,13 @@ def build_task_dashboard(uid):
             text += f"\n📂 **{current_cat}**\n"
             
         if is_done == 1:
-            # 🟢 Выполнено
-            text += f"🟢 [{get_text(uid, 'status_done')}] ~{ttext}~\n"
+            # 🟢 Сделано: зеленая кнопка + зачеркнутый текст
+            text += f"🟢 ~{ttext}~\n"
             btn_label = f"{get_text(uid, 'btn_undone')}: {ttext[:22]}"
             markup.add(types.InlineKeyboardButton(btn_label, callback_data=f"toggle_{tid}"))
         else:
-            # 🔴 В работе
-            text += f"🔴 [{get_text(uid, 'status_todo')}] {ttext}\n"
+            # 🔴 Активно: ТОЛЬКО красный кружок, убрали текст "В работе"
+            text += f"🔴 {ttext}\n"
             btn_label = f"{get_text(uid, 'btn_done')}: {ttext[:22]}"
             markup.add(types.InlineKeyboardButton(btn_label, callback_data=f"toggle_{tid}"))
             
@@ -383,12 +347,39 @@ def show_dashboard(message):
 @bot.message_handler(func=lambda msg: msg.text in [LANGS['ru']['btn_folders'], LANGS['en']['btn_folders']])
 def show_folders(message):
     uid = message.from_user.id
-    cats = get_user_categories(uid)
-    text = get_text(uid, 'folders_title')
-    for c in cats:
-        text += f"• {c}\n"
-    text += f"\n{get_text(uid, 'folders_hint')}"
-    bot.send_message(uid, text, parse_mode="Markdown")
+    categories = get_user_categories(uid)
+
+    with db_lock:
+        conn = get_db()
+        c = conn.cursor()
+        
+        text = get_text(uid, 'folders_title')
+        has_any_tasks = False
+        
+        for category in categories:
+            c.execute(
+                "SELECT task_text, is_completed FROM tasks WHERE user_id = ? AND category = ? ORDER BY is_completed ASC, task_id DESC", 
+                (uid, category)
+            )
+            tasks = c.fetchall()
+            
+            if not tasks:
+                continue
+                
+            has_any_tasks = True
+            text += f"📁 **{category}**\n"
+            for task, completed in tasks:
+                icon = "🟢" if completed else "🔴"
+                task_view = f"~{task}~" if completed else task
+                text += f"{icon} {task_view}\n"
+            text += "\n"
+            
+        conn.close()
+
+    if not has_any_tasks:
+        text += get_text(uid, 'folders_empty')
+
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("toggle_"))
 def callback_toggle_task(call):
@@ -406,7 +397,7 @@ def callback_toggle_task(call):
             conn.commit()
         conn.close()
         
-    bot.answer_callback_query(call.id, "Статус обновлен!")
+    bot.answer_callback_query(call.id, "✅")
     text, markup = build_task_dashboard(uid)
     try:
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
@@ -414,7 +405,7 @@ def callback_toggle_task(call):
         pass
 
 # =====================================================================
-# 7. ИИ-ЯДРО (WHISPER + GPT-4O-MINI)
+# 6. ИИ-ЯДРО (WHISPER + GPT-4O-MINI) С РАСПРЕДЕЛЕНИЕМ
 # =====================================================================
 def transcribe_voice_ogg(file_path):
     if not AI_API_KEY:
@@ -428,7 +419,8 @@ def transcribe_voice_ogg(file_path):
         return res.json().get("text", "")
     return ""
 
-def process_thoughts_with_gpt(raw_text, active_categories, user_open_tasks):
+def process_thoughts_with_gpt(raw_text, active_categories, user_open_tasks, uid):
+    user_lang = get_user_lang(uid)
     url = f"{AI_BASE_URL}/chat/completions"
     headers = {
         "Authorization": f"Bearer {AI_API_KEY}",
@@ -438,11 +430,20 @@ def process_thoughts_with_gpt(raw_text, active_categories, user_open_tasks):
     system_prompt = f"""
 You are an intelligent personal assistant.
 Analyze the user's speech/text and return strict JSON.
+Target Language of response: {user_lang}.
+The task text should be written in {user_lang}.
 
-Available categories: {json.dumps(active_categories, ensure_ascii=False)}
-Open user tasks: {json.dumps(user_open_tasks, ensure_ascii=False)}
+Available categories (DO NOT change their spelling, emojis, or language!): {json.dumps(active_categories, ensure_ascii=False)}
+Open user tasks (to match if completed): {json.dumps(user_open_tasks, ensure_ascii=False)}
 
-Rules:
+CRITICAL CLASSIFICATION RULES:
+- "📅 Календарь" (or "📅 Calendar") is strictly for meetings, calls, events, and tasks with specific dates/times (e.g., "завтра в 10", "в четверг").
+- "🛒 Покупки" (or "🛒 Groceries") is strictly for buying products, food, things, shopping lists.
+- "🔴 Срочно" (or "🔴 Urgent") is strictly for high priority tasks that must be done immediately or today.
+- "💡 Идеи" (or "💡 Ideas") is for thoughts, future plans, dreams, inspirations without specific action.
+- "📥 Входящие" (or "📥 Inbox") is for generic tasks that do not fit into other categories (e.g. "убраться", "сделать педикюр").
+
+Rules for completion:
 1. If the user states they HAVE COMPLETED an open task from the list, return its ID in the "completed_task_ids" array.
 2. Extract all NEW tasks/ideas, clean filler words, and place them into "new_tasks" array with "category" and "text".
 
@@ -450,7 +451,7 @@ Return ONLY JSON:
 {{
   "completed_task_ids": [ids],
   "new_tasks": [
-     {{"category": "category_name", "text": "cleaned_task_text"}}
+     {{"category": "EXACT_CATEGORY_NAME", "text": "cleaned_task_text"}}
   ]
 }}
 """
@@ -502,7 +503,7 @@ def handle_voice_note(message):
         raw_text = transcribe_voice_ogg(temp_file)
         
         if not raw_text.strip():
-            bot.edit_message_text("❌ Не удалось распознать речь. Попробуйте записать четче.", message.chat.id, status_msg.message_id)
+            bot.edit_message_text("❌ Не удалось распознать речь. Попробуйте записать еще раз.", message.chat.id, status_msg.message_id)
             return
 
         with db_lock:
@@ -513,7 +514,7 @@ def handle_voice_note(message):
             conn.close()
 
         cats = get_user_categories(uid)
-        ai_res = process_thoughts_with_gpt(raw_text, cats, open_tasks)
+        ai_res = process_thoughts_with_gpt(raw_text, cats, open_tasks, uid)
         
         completed_ids = ai_res.get("completed_task_ids", [])
         new_tasks = ai_res.get("new_tasks", [])
@@ -545,7 +546,7 @@ def handle_voice_note(message):
             os.remove(temp_file)
 
 # =====================================================================
-# 8. ТЕКСТОВЫЙ ВВОД ЗАДАЧ И КАСТОМНЫЕ КАТЕГОРИИ
+# 8. ОБРАБОТКА ТЕКСТА И КАСТОМНЫЕ КАТЕГОРИИ
 # =====================================================================
 @bot.message_handler(func=lambda msg: not msg.text.startswith("/"))
 def handle_text_messages(message):
@@ -564,7 +565,7 @@ def handle_text_messages(message):
         bot.send_message(uid, get_text(uid, 'new_cat_success', cat=text_val), reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
         return
 
-    # 2. Переключение языков из кнопки
+    # 2. Переключение языков из меню
     if text_val in [LANGS['ru']['btn_lang'], LANGS['en']['btn_lang']]:
         change_language_menu(message)
         return
@@ -581,7 +582,7 @@ def handle_text_messages(message):
     if text_val in [LANGS['ru']['btn_support'], LANGS['en']['btn_support']]:
         support_handler(message); return
 
-    # 4. Если введен обычный текст — ИИ создает/закрывает задачи по нему
+    # 4. Ввод задачи текстом
     with db_lock:
         conn = get_db()
         c = conn.cursor()
@@ -590,7 +591,7 @@ def handle_text_messages(message):
         conn.close()
         
     cats = get_user_categories(uid)
-    ai_res = process_thoughts_with_gpt(text_val, cats, open_tasks)
+    ai_res = process_thoughts_with_gpt(text_val, cats, open_tasks, uid)
     
     completed_ids = ai_res.get("completed_task_ids", [])
     new_tasks = ai_res.get("new_tasks", [])
@@ -633,8 +634,15 @@ def callback_set_language(call):
         conn.commit()
         conn.close()
         
-    bot.answer_callback_query(call.id, "Language Updated")
-    bot.send_message(uid, get_text(uid, 'lang_changed'), reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
+    bot.answer_callback_query(call.id, "✅")
+    
+    try:
+        bot.edit_message_text(get_text(uid, 'lang_changed'), call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+        
+    welcome_msg = get_text(uid, 'welcome', name=call.from_user.first_name)
+    bot.send_message(uid, welcome_msg, reply_markup=get_main_keyboard(uid), parse_mode="Markdown")
 
 def support_handler(message):
     uid = message.from_user.id
@@ -702,15 +710,49 @@ def process_successful_payment(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "buy_yookassa")
 def callback_buy_yookassa(call):
-    # Каркас интеграции с ЮKassa
     yookassa_pay_url = "https://yookassa.ru"
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("💳 Оплатить 299 ₽ через ЮKassa", url=yookassa_pay_url))
     bot.send_message(call.message.chat.id, "Нажмите кнопку ниже для безопасной оплаты картой любого банка РФ:", reply_markup=markup)
 
 # =====================================================================
-# 10. АДМИН-ПАНЕЛЬ И АНАЛИТИКА (/stats_all И /stats_period)
+# 10. АДМИН-ПАНЕЛЬ, АНАЛИТИКА И НАЧИСЛЕНИЕ ПОПЫТОК
 # =====================================================================
+@bot.message_handler(commands=['add_free'])
+def add_free_attempts(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    parts = message.text.split()
+    if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+        bot.reply_to(
+            message,
+            "📝 **Формат команды:**\n`/add_free USER_ID КОЛИЧЕСТВО`\n\n"
+            "*Пример:*\n`/add_free 123456789 10`",
+            parse_mode="Markdown"
+        )
+        return
+
+    user_id = int(parts[1])
+    amount = int(parts[2])
+
+    with db_lock:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("UPDATE users SET free_voice_left = free_voice_left + ? WHERE user_id = ?", (amount, user_id))
+        changed = c.rowcount
+        conn.commit()
+        conn.close()
+
+    if changed == 0:
+        bot.reply_to(message, "❌ Пользователь с таким ID не найден в базе.")
+    else:
+        bot.reply_to(message, f"✅ Пользователю `{user_id}` успешно добавлено бесплатных разборов: **{amount}**.", parse_mode="Markdown")
+        try:
+            bot.send_message(user_id, f"🎁 **Вам начислено дополнительных голосовых разборов:** +{amount}!")
+        except Exception:
+            pass
+
 @bot.message_handler(commands=['stats_all'])
 def stats_all_command(message):
     if message.from_user.id != ADMIN_ID:
@@ -726,8 +768,8 @@ def stats_all_command(message):
         c.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1")
         total_prem = c.fetchone()[0]
         
-        c.execute("SELECT SUM(amount_rub), SUM(amount_stars) FROM payments")
-        rev_rub, rev_stars = c.fetchone()
+        c.execute("SELECT SUM(amount_stars) FROM payments")
+        rev_stars = c.fetchone()[0]
         
         c.execute("SELECT language, COUNT(*) FROM users GROUP BY language")
         lang_stats = c.fetchall()
@@ -742,7 +784,6 @@ def stats_all_command(message):
         f"⭐ Платящих (Premium): **{total_prem}**\n"
         f"⚪ Бесплатных: **{total_users - total_prem}**\n\n"
         f"🌍 **Языки аудитории:**\n{lang_text}\n\n"
-        f"💵 Выручка ЮKassa: **{rev_rub or 0.0} ₽**\n"
         f"⭐ Выручка Telegram Stars: **{rev_stars or 0} XTR**"
     )
     bot.reply_to(message, text, parse_mode="Markdown")
@@ -763,15 +804,14 @@ def stats_period_command(message):
         c.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (date_limit,))
         new_users = c.fetchone()[0]
         
-        c.execute("SELECT SUM(amount_rub), SUM(amount_stars) FROM payments WHERE created_at >= ?", (date_limit,))
-        p_rub, p_stars = c.fetchone()
+        c.execute("SELECT SUM(amount_stars) FROM payments WHERE created_at >= ?", (date_limit,))
+        p_stars = c.fetchone()[0]
         
         conn.close()
         
     text = (
         f"📈 **АНАЛИТИКА ЗА ПОСЛЕДНИЕ {days} ДНЕЙ:**\n\n"
         f"👤 Новых пользователей: **{new_users}**\n"
-        f"💵 Доход ЮKassa: **{p_rub or 0.0} ₽**\n"
         f"⭐ Доход Stars: **{p_stars or 0} XTR**"
     )
     bot.reply_to(message, text, parse_mode="Markdown")
