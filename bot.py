@@ -3,10 +3,11 @@ import sys
 import json
 import time
 import uuid
+import calendar as calmod
 import sqlite3
 import logging
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -72,6 +73,12 @@ TTS_API_KEY = os.environ.get("TTS_API_KEY", "").strip()
 TTS_MODEL = os.environ.get("TTS_MODEL", "tts-1")
 TTS_VOICE = os.environ.get("TTS_VOICE", "alloy")
 
+# Стоимость запросов для админ-отчёта (₽ за 1 млн токенов / за минуту Whisper).
+# Значения по умолчанию соответствуют gpt-4o-mini; можно переопределить в env.
+LLM_PRICE_IN_RUB = float(os.environ.get("LLM_PRICE_IN_RUB_PER_1M", "15"))
+LLM_PRICE_OUT_RUB = float(os.environ.get("LLM_PRICE_OUT_RUB_PER_1M", "60"))
+WHISPER_PRICE_RUB_PER_MIN = float(os.environ.get("WHISPER_PRICE_RUB_PER_MIN", "1.5"))
+
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Не задана переменная TELEGRAM_BOT_TOKEN")
 
@@ -105,6 +112,7 @@ LANGS = {
         "btn_support": "💬 Поддержка",
         "btn_done": "✅ Сделано",
         "btn_undone": "↩️ Вернуть",
+        "btn_calendar": "🗓 Календарь",
         "dash_title": "📋 Ваши задачи:",
         "empty_tasks": "📭 Задач пока нет. Напишите или наговорите, что нужно сделать.",
         "empty_events": "📭 Событий пока нет.",
@@ -142,6 +150,15 @@ LANGS = {
         "support": "💬 По вопросам поддержки напишите: {contact}",
         "unknown_timezone": "Не удалось распознать часовой пояс. Проверьте написание, например Europe/Moscow.",
         "confirm_event": "Событие сохранено.",
+        "cal_title": "🗓 Календарь — {month}",
+        "cal_legend": "✳ — день, в котором есть события. Нажмите на дату внизу, чтобы посмотреть.",
+        "cal_no_dates": "В этом месяце событий нет.",
+        "cal_day_title": "📅 {date}:",
+        "cal_day_empty": "📭 В этот день событий нет.",
+        "cal_today": "📍 Сегодня",
+        "free_usage": "Формат: /free 10 — начислить попытки себе.\nБез аргументов — показать остаток.",
+        "free_added": "🎁 Начислено попыток: +{count}. Всего теперь: {free}.",
+        "report_usage": "Формат отчёта:\n/report 01.10.2026 10:00 05.10.2026 23:59\nили без времени: /report 01.10 05.10",
     },
     "en": {
         "welcome": (
@@ -160,6 +177,7 @@ LANGS = {
         "btn_support": "💬 Support",
         "btn_done": "✅ Done",
         "btn_undone": "↩️ Undo",
+        "btn_calendar": "🗓 Calendar",
         "dash_title": "📋 Your tasks:",
         "empty_tasks": "📭 No tasks yet. Send or type something you need to do.",
         "empty_events": "📭 No events yet.",
@@ -197,6 +215,15 @@ LANGS = {
         "support": "💬 For support, contact: {contact}",
         "unknown_timezone": "Unknown time zone. Use a valid IANA name, for example Europe/London.",
         "confirm_event": "Event saved.",
+        "cal_title": "🗓 Calendar — {month}",
+        "cal_legend": "✳ — a day with events. Tap a date below to view them.",
+        "cal_no_dates": "No events this month.",
+        "cal_day_title": "📅 {date}:",
+        "cal_day_empty": "📭 No events on this day.",
+        "cal_today": "📍 Today",
+        "free_usage": "Format: /free 10 — add attempts to yourself.\nWithout arguments — show balance.",
+        "free_added": "🎁 Attempts added: +{count}. Balance: {free}.",
+        "report_usage": "Report format:\n/report 01.10.2026 10:00 05.10.2026 23:59\nor without time: /report 01.10 05.10",
     },
 }
 
@@ -347,6 +374,37 @@ def init_db():
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(sent, due_utc)"
             )
+
+            # Статистика для админ-отчёта: активность и запросы к ИИ.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS activity (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    kind TEXT DEFAULT 'text',
+                    prompt_tokens INTEGER DEFAULT 0,
+                    completion_tokens INTEGER DEFAULT 0,
+                    audio_seconds REAL DEFAULT 0,
+                    cost_rub REAL DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity(created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ai_requests_ts ON ai_requests(created_at)"
+            )
             conn.commit()
         finally:
             conn.close()
@@ -454,6 +512,50 @@ def register_user(message):
             logger.exception("Не удалось уведомить администратора о регистрации")
 
 
+def log_activity(uid):
+    """Отметка активности пользователя (для отчёта «сколько в сети»)."""
+    try:
+        with db_lock:
+            conn = get_db()
+            try:
+                conn.execute("INSERT INTO activity (user_id) VALUES (?)", (uid,))
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception:
+        logger.exception("Не удалось записать активность пользователя")
+
+
+def log_ai_request(uid, kind, prompt_tokens=0, completion_tokens=0, audio_seconds=0):
+    """Запрос к ИИ + его стоимость в рублях (для отчёта)."""
+    cost = (float(prompt_tokens) / 1_000_000) * LLM_PRICE_IN_RUB
+    cost += (float(completion_tokens) / 1_000_000) * LLM_PRICE_OUT_RUB
+    if audio_seconds:
+        cost += (float(audio_seconds) / 60.0) * WHISPER_PRICE_RUB_PER_MIN
+    try:
+        with db_lock:
+            conn = get_db()
+            try:
+                conn.execute(
+                    """INSERT INTO ai_requests
+                       (user_id, kind, prompt_tokens, completion_tokens, audio_seconds, cost_rub)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        uid,
+                        kind,
+                        int(prompt_tokens or 0),
+                        int(completion_tokens or 0),
+                        float(audio_seconds or 0),
+                        round(cost, 4),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+    except Exception:
+        logger.exception("Не удалось записать запрос ИИ")
+
+
 # ============================================================
 # 4. КЛАВИАТУРЫ И СТАРТОВОЕ МЕНЮ
 # ============================================================
@@ -476,6 +578,7 @@ def main_keyboard(uid):
         types.KeyboardButton(tr(uid, "btn_support")),
         types.KeyboardButton(tr(uid, "btn_language")),
     )
+    markup.add(types.KeyboardButton(tr(uid, "btn_calendar")))
     return markup
 
 
@@ -512,12 +615,14 @@ def handle_help(message):
         text = (
             "Send a voice note or text with your plans. "
             "I’ll sort tasks and events. Use the menu to view tasks, events, folders, "
-            "settings, or change language."
+            "calendar, settings, or change language. "
+            "Commands: /calendar — events calendar, /free — free attempts balance."
         )
     else:
         text = (
             "Отправьте голосовое или текст с планами. Я разделю задачи и события. "
-            "Используйте меню, чтобы просматривать дела, события, папки и настройки."
+            "Используйте меню, чтобы просматривать дела, события, папки, календарь и настройки. "
+            "Команды: /calendar — календарь событий, /free — остаток попыток."
         )
     bot.send_message(message.chat.id, text, reply_markup=main_keyboard(uid))
 
@@ -644,11 +749,12 @@ def show_folders(message):
     categories = get_user_categories(uid)
     lines = []
     found = False
+    filled = []  # (индекс в categories, название) — для кнопок просмотра папки
 
     with db_lock:
         conn = get_db()
         try:
-            for category in categories:
+            for index, category in enumerate(categories):
                 rows = conn.execute(
                     """SELECT task_text, is_completed FROM tasks
                        WHERE user_id = ? AND category = ?
@@ -660,6 +766,7 @@ def show_folders(message):
                     continue
 
                 found = True
+                filled.append((index, category))
                 lines.append(f"📁 {category}")
                 for row in rows:
                     done = bool(row["is_completed"])
@@ -670,7 +777,20 @@ def show_folders(message):
             conn.close()
 
     text = "\n".join(lines) if found else tr(uid, "folders_empty")
-    bot.send_message(message.chat.id, text)
+
+    markup = None
+    if filled:
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        buttons = [
+            types.InlineKeyboardButton(
+                f"📁 {category[:20]}", callback_data=f"folder:{index}"
+            )
+            for index, category in filled
+        ]
+        for i in range(0, len(buttons), 2):
+            markup.row(*buttons[i:i + 2])
+
+    bot.send_message(message.chat.id, text, reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("task:"))
@@ -745,6 +865,220 @@ def delete_event(call):
         )
     except Exception:
         pass
+
+
+# ============================================================
+# 5.1 ПРОСМОТР ОДНОЙ ПАПКИ
+# ============================================================
+
+def folder_tasks_text(uid, category):
+    """Список задач одной папки."""
+    with db_lock:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                """SELECT task_text, is_completed FROM tasks
+                   WHERE user_id = ? AND category = ?
+                   ORDER BY is_completed ASC, task_id DESC""",
+                (uid, category),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    if not rows:
+        return f"📁 {category}\n" + tr(uid, "folders_empty")
+
+    lines = [f"📁 {category}"]
+    for row in rows:
+        done = bool(row["is_completed"])
+        task = f"~{row['task_text']}~" if done else row["task_text"]
+        lines.append(f"{'🟢' if done else '🔴'} {task}")
+    return "\n".join(lines)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("folder:"))
+def open_folder(call):
+    uid = call.from_user.id
+    try:
+        index = int(call.data.split(":", 1)[1])
+        category = get_user_categories(uid)[index]
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid folder")
+        return
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, folder_tasks_text(uid, category))
+
+
+# ============================================================
+# 5.2 КАЛЕНДАРЬ СОБЫТИЙ
+# ============================================================
+
+MONTHS = {
+    "ru": [
+        "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+        "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+    ],
+    "en": [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ],
+}
+WEEKDAYS_HEADER = {"ru": "Пн Вт Ср Чт Пт Сб Вс", "en": "Mo Tu We Th Fr Sa Su"}
+
+
+def _events_by_local_date(uid):
+    """Словарь {локальная дата: [(название, 'HH:MM'), ...]} по времени события."""
+    user_tz_name, _off, _voice = get_user_preferences(uid)
+    with db_lock:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT title, start_utc, timezone FROM events "
+                "WHERE user_id = ? AND cancelled = 0",
+                (uid,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    result = {}
+    for row in rows:
+        try:
+            tz = ZoneInfo(row["timezone"] or user_tz_name)
+            local = datetime.fromisoformat(row["start_utc"]).astimezone(tz)
+        except (ValueError, ZoneInfoNotFoundError):
+            continue
+        result.setdefault(local.date(), []).append((row["title"], local.strftime("%H:%M")))
+
+    for items in result.values():
+        items.sort(key=lambda pair: pair[1])
+    return result
+
+
+def _now_in_user_tz(uid):
+    tz_name, _off, _voice = get_user_preferences(uid)
+    try:
+        return datetime.now(ZoneInfo(tz_name))
+    except ZoneInfoNotFoundError:
+        return datetime.now(timezone.utc)
+
+
+def build_calendar(uid, year, month):
+    """Текст месяца + кнопки: навигация и дни со событиями (дни отмечены '*')."""
+    lang = get_user_lang(uid)
+    events = _events_by_local_date(uid)
+    month_name = MONTHS[lang][month - 1]
+    weeks = calmod.Calendar(firstweekday=0).monthdayscalendar(year, month)
+
+    lines = [tr(uid, "cal_title", month=f"{month_name} {year}"), ""]
+    lines.append(WEEKDAYS_HEADER[lang])
+    for week in weeks:
+        cells = []
+        for day in week:
+            if day == 0:
+                cells.append("    ")
+            else:
+                marker = "*" if date(year, month, day) in events else " "
+                cells.append(f"{day:>3}{marker}")
+        lines.append("".join(cells).rstrip())
+    lines.append("")
+
+    days_with = sorted(d for d in events if d.year == year and d.month == month)
+    if days_with:
+        lines.append(tr(uid, "cal_legend"))
+        lines.append(", ".join(str(d.day) for d in days_with))
+    else:
+        lines.append(tr(uid, "cal_no_dates"))
+
+    markup = types.InlineKeyboardMarkup(row_width=7)
+    prev_y, prev_m = (year - 1, 12) if month == 1 else (year, month - 1)
+    next_y, next_m = (year + 1, 1) if month == 12 else (year, month + 1)
+    markup.row(
+        types.InlineKeyboardButton("⬅️", callback_data=f"calnav:{prev_y:04d}-{prev_m:02d}"),
+        types.InlineKeyboardButton(tr(uid, "cal_today"), callback_data="caltoday"),
+        types.InlineKeyboardButton("➡️", callback_data=f"calnav:{next_y:04d}-{next_m:02d}"),
+    )
+    row_buttons = []
+    for d in days_with:
+        row_buttons.append(
+            types.InlineKeyboardButton(str(d.day), callback_data=f"calday:{d.isoformat()}")
+        )
+        if len(row_buttons) == 7:
+            markup.row(*row_buttons)
+            row_buttons = []
+    if row_buttons:
+        markup.row(*row_buttons)
+
+    return "\n".join(lines), markup
+
+
+def _send_or_edit_calendar(target, uid, year, month):
+    """Отправить календарь сообщением или отредактировать существующее."""
+    text, markup = build_calendar(uid, year, month)
+    if isinstance(target, types.CallbackQuery):
+        try:
+            bot.edit_message_text(
+                text,
+                target.message.chat.id,
+                target.message.message_id,
+                reply_markup=markup,
+            )
+        except Exception:
+            logger.exception("Не удалось обновить календарь")
+        bot.answer_callback_query(target.id)
+    else:
+        bot.send_message(target.chat.id, text, reply_markup=markup)
+
+
+@bot.message_handler(commands=["calendar"])
+def calendar_command(message):
+    now = _now_in_user_tz(message.from_user.id)
+    _send_or_edit_calendar(message, message.from_user.id, now.year, now.month)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("calnav:"))
+def calendar_nav(call):
+    uid = call.from_user.id
+    try:
+        year_s, month_s = call.data.split(":", 1)[1].split("-")
+        year, month = int(year_s), int(month_s)
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid month")
+        return
+    if not 1 <= month <= 12:
+        bot.answer_callback_query(call.id, "Invalid month")
+        return
+    _send_or_edit_calendar(call, uid, year, month)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "caltoday")
+def calendar_today(call):
+    now = _now_in_user_tz(call.from_user.id)
+    _send_or_edit_calendar(call, call.from_user.id, now.year, now.month)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("calday:"))
+def calendar_open_day(call):
+    uid = call.from_user.id
+    try:
+        day = date.fromisoformat(call.data.split(":", 1)[1])
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid date")
+        return
+
+    items = _events_by_local_date(uid).get(day, [])
+    if items:
+        lines = [tr(uid, "cal_day_title", date=day.strftime("%d.%m.%Y"))]
+        lines.extend(f"• {title} — {time_hhmm}" for title, time_hhmm in items)
+    else:
+        lines = [tr(uid, "cal_day_empty")]
+
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "\n".join(lines))
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "calnoop")
+def calendar_noop(call):
+    bot.answer_callback_query(call.id)
 
 
 # ============================================================
@@ -952,7 +1286,7 @@ def get_open_tasks(uid):
             conn.close()
 
 
-def analyze_user_text(uid, raw_text):
+def analyze_user_text(uid, raw_text, kind="text", audio_seconds=0):
     if not AI_API_KEY:
         raise RuntimeError("AI_API_KEY is not configured")
 
@@ -1029,7 +1363,8 @@ JSON schema:
         logger.error("Chat API %s: %s", response.status_code, response.text[:1000])
         raise RuntimeError("Chat API error")
 
-    content = response.json()["choices"][0]["message"]["content"]
+    payload = response.json()
+    content = payload["choices"][0]["message"]["content"]
     data = parse_ai_json(content)
 
     if not isinstance(data, dict):
@@ -1038,6 +1373,16 @@ JSON schema:
     data.setdefault("completed_task_ids", [])
     data.setdefault("new_tasks", [])
     data.setdefault("new_events", [])
+
+    # Учёт стоимости запроса для админ-отчёта.
+    usage = payload.get("usage") or {}
+    log_ai_request(
+        uid,
+        kind,
+        prompt_tokens=usage.get("prompt_tokens"),
+        completion_tokens=usage.get("completion_tokens"),
+        audio_seconds=audio_seconds,
+    )
     return data
 
 
@@ -1229,6 +1574,7 @@ def send_answer(uid, text):
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     uid = message.from_user.id
+    log_activity(uid)
     free, premium = get_user_data(uid)
 
     if free <= 0 and not premium:
@@ -1250,7 +1596,12 @@ def handle_voice(message):
             bot.edit_message_text(tr(uid, "no_speech"), message.chat.id, status.message_id)
             return
 
-        result = analyze_user_text(uid, transcript)
+        result = analyze_user_text(
+            uid,
+            transcript,
+            kind="voice",
+            audio_seconds=getattr(message.voice, "duration", 0) or 0,
+        )
         counts = save_ai_result(uid, result, use_voice_limit=True)
 
         try:
@@ -1285,6 +1636,8 @@ def handle_plain_text(message):
 
     if not text:
         return
+
+    log_activity(uid)
 
     # Ввод часового пояса.
     if user_states.get(uid) == "timezone":
@@ -1467,6 +1820,8 @@ def text_router(message):
             return show_tasks(message)
         if text in {LANGS["ru"]["btn_events"], LANGS["en"]["btn_events"]}:
             return show_events(message)
+        if text in {LANGS["ru"]["btn_calendar"], LANGS["en"]["btn_calendar"]}:
+            return calendar_command(message)
         if text in {LANGS["ru"]["btn_folders"], LANGS["en"]["btn_folders"]}:
             return show_folders(message)
         if text in {LANGS["ru"]["btn_new_cat"], LANGS["en"]["btn_new_cat"]}:
@@ -1534,6 +1889,154 @@ def admin_add_free(message):
         bot.send_message(target, tr(target, "grant_user", count=amount))
     except Exception:
         logger.exception("Не удалось отправить уведомление о начислении")
+
+
+@bot.message_handler(commands=["free"])
+def free_self_command(message):
+    """Попытки: /free — остаток; /free N — начислить себе (только админ)."""
+    uid = message.from_user.id
+    parts = message.text.split()
+
+    if len(parts) == 1:
+        free, _premium = get_user_data(uid)
+        bot.reply_to(message, tr(uid, "premium", free=free))
+        return
+
+    if uid != ADMIN_ID:
+        bot.reply_to(message, tr(uid, "not_admin"))
+        return
+
+    if len(parts) != 2 or not parts[1].isdigit():
+        bot.reply_to(message, tr(uid, "free_usage"))
+        return
+
+    amount = int(parts[1])
+    if amount <= 0 or amount > 10000:
+        bot.reply_to(message, "Укажите количество от 1 до 10000.")
+        return
+
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            conn.execute(
+                "UPDATE users SET free_voice_left=free_voice_left+? WHERE user_id=?",
+                (amount, uid),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    free, _premium = get_user_data(uid)
+    bot.reply_to(message, tr(uid, "free_added", count=amount, free=free))
+
+
+def _parse_report_dt(text_value, default_hm):
+    """'01.10.2026 10:00' | '01.10.2026' | '01.10 10:00' | '01.10' -> datetime (локальное время)."""
+    for fmt, hm in (
+        ("%d.%m.%Y %H:%M", None),
+        ("%d.%m.%Y", default_hm),
+        ("%d.%m %H:%M", None),
+        ("%d.%m", default_hm),
+    ):
+        try:
+            dt = datetime.strptime(text_value, fmt)
+        except ValueError:
+            continue
+        if "%Y" not in fmt:
+            dt = dt.replace(year=datetime.now().year)
+        if hm:
+            hour, minute = hm.split(":")
+            dt = dt.replace(hour=int(hour), minute=int(minute))
+        return dt
+    return None
+
+
+@bot.message_handler(commands=["report"])
+def admin_report(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    args = message.text.split()[1:]
+    if len(args) == 2:
+        start_local = _parse_report_dt(args[0], "00:00")
+        end_local = _parse_report_dt(args[1], "23:59")
+    elif len(args) == 4:
+        start_local = _parse_report_dt(f"{args[0]} {args[1]}", None)
+        end_local = _parse_report_dt(f"{args[2]} {args[3]}", None)
+    else:
+        bot.reply_to(message, tr(message.from_user.id, "report_usage"))
+        return
+
+    if not start_local or not end_local or end_local < start_local:
+        bot.reply_to(message, tr(message.from_user.id, "report_usage"))
+        return
+
+    tz_name, _off, _voice = get_user_preferences(ADMIN_ID)
+    try:
+        tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
+
+    fmt_utc = "%Y-%m-%d %H:%M:%S"
+    start_utc = start_local.replace(tzinfo=tz).astimezone(timezone.utc)
+    end_utc = (end_local + timedelta(minutes=1)).replace(tzinfo=tz).astimezone(timezone.utc)
+    s, e = start_utc.strftime(fmt_utc), end_utc.strftime(fmt_utc)
+
+    with db_lock:
+        conn = get_db()
+        try:
+            new_total = conn.execute(
+                "SELECT COUNT(*) n FROM users WHERE created_at>=? AND created_at<?",
+                (s, e),
+            ).fetchone()["n"]
+            new_free = conn.execute(
+                "SELECT COUNT(*) n FROM users WHERE created_at>=? AND created_at<? AND is_premium=0",
+                (s, e),
+            ).fetchone()["n"]
+            paid_users = conn.execute(
+                "SELECT COUNT(DISTINCT user_id) n FROM payments WHERE created_at>=? AND created_at<?",
+                (s, e),
+            ).fetchone()["n"]
+            active_users = conn.execute(
+                "SELECT COUNT(DISTINCT user_id) n FROM activity WHERE created_at>=? AND created_at<?",
+                (s, e),
+            ).fetchone()["n"]
+            req = conn.execute(
+                "SELECT COUNT(*) n, COALESCE(SUM(cost_rub),0) c "
+                "FROM ai_requests WHERE created_at>=? AND created_at<?",
+                (s, e),
+            ).fetchone()
+            by_kind = conn.execute(
+                "SELECT kind, COUNT(*) n FROM ai_requests "
+                "WHERE created_at>=? AND created_at<? GROUP BY kind",
+                (s, e),
+            ).fetchall()
+            pay = conn.execute(
+                "SELECT COALESCE(SUM(amount_stars),0) s, COALESCE(SUM(amount_rub),0) r "
+                "FROM payments WHERE created_at>=? AND created_at<?",
+                (s, e),
+            ).fetchone()
+        finally:
+            conn.close()
+
+    kind_map = {row["kind"]: row["n"] for row in by_kind}
+    period_text = (
+        f"{start_local.strftime('%d.%m.%Y %H:%M')} — "
+        f"{end_local.strftime('%d.%m.%Y %H:%M')} ({tz_name})"
+    )
+    bot.reply_to(
+        message,
+        f"📊 ОТЧЁТ за период\n{period_text}\n\n"
+        f"👥 Новых пользователей: {new_total}\n"
+        f"   • бесплатных: {new_free}\n"
+        f"   • платных (с оплатой в периоде): {paid_users}\n"
+        f"🟢 Активны в периоде (писали/голосовые): {active_users}\n"
+        f"📨 Запросов к ИИ: {req['n']} "
+        f"(голос: {kind_map.get('voice', 0)}, текст: {kind_map.get('text', 0)})\n"
+        f"💰 Оплат: {pay['s']} XTR / {pay['r']:.2f} ₽\n"
+        f"🤖 Расход на ИИ-запросы: {req['c']:.2f} ₽",
+    )
 
 
 @bot.message_handler(commands=["stats_all"])
