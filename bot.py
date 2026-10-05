@@ -102,6 +102,9 @@ LANGS = {
         "btn_language": "🌐 Язык / Language",
         "btn_premium": "⭐ Лимит",
         "btn_support": "💬 Поддержка",
+        "btn_done": "✅ Сделано",
+        "btn_undone": "↩️ Вернуть",
+        "dash_title": "📋 Ваши задачи:",
         "empty_tasks": "📭 Задач пока нет. Напишите или наговорите, что нужно сделать.",
         "empty_events": "📭 Событий пока нет.",
         "folders_empty": "В папках пока нет задач.",
@@ -154,6 +157,9 @@ LANGS = {
         "btn_language": "🌐 Language / Язык",
         "btn_premium": "⭐ Limits",
         "btn_support": "💬 Support",
+        "btn_done": "✅ Done",
+        "btn_undone": "↩️ Undo",
+        "dash_title": "📋 Your tasks:",
         "empty_tasks": "📭 No tasks yet. Send or type something you need to do.",
         "empty_events": "📭 No events yet.",
         "folders_empty": "There are no tasks in your folders yet.",
@@ -209,7 +215,11 @@ SUPPORT_CONTACT = os.environ.get("SUPPORT_CONTACT", "@your_support_username")
 
 def tr(uid, key, **kwargs):
     lang = get_user_lang(uid)
-    template = LANGS.get(lang, LANGS["ru"]).get(key, LANGS["ru"][key])
+    # Безопасный fallback: своя языковая таблица -> русская -> сам ключ.
+    # (Старый вариант .get(key, LANGS["ru"][key]) падал с KeyError,
+    #  потому что значение по умолчанию вычисляется заранее.)
+    table = LANGS.get(lang) or LANGS["ru"]
+    template = table.get(key) or LANGS["ru"].get(key) or str(key)
     return template.format(**kwargs)
 
 
