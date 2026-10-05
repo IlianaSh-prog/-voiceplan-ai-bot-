@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: voiceplan-ai
+    runtime: docker          # использует Dockerfile из репозитория
+    dockerfilePath: ./Dockerfile
+    plan: starter            # ВАЖНО: free-план засыпает и не тянет Whisper (нужно ≥2 ГБ RAM)
+    healthCheckPath: /
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false          # вписать вручную в панели Render
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_BASE_URL
+        value: https://api.proxyapi.ru/openai/v1
+      - key: AI_MODEL
+        value: gpt-4o-mini
+      - key: ADMIN_ID
+        sync: false
+      - key: SUPPORT_HANDLE
+        value: @your_support
+      - key: OFFER_URL
+        sync: false
+      - key: FREE_LIMIT
+        value: "10"
+      - key: PRICE_STARS
+        value: "199"
+      - key: TZ_OFFSET_HOURS
+        value: "3"
+      - key: WHISPER_MODEL
+        value: base           # tiny/base/base — под 512 МБ; small требует ~2 ГБ RAM
+      - key: WHISPER_DEVICE
+        value: cpu
+      - key: WHISPER_COMPUTE
+        value: int8
+      - key: HF_ENDPOINT
+        value: https://hf-mirror.com   # зеркало, если HuggingFace медленный/заблокирован
+      - key: DB_PATH
+        value: /tmp/voiceplan.db       # на Render файловая система эфемерна
