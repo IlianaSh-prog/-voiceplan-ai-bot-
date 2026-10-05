@@ -13,6 +13,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import requests
 import telebot
 from telebot import types
+from telebot.apihelper import ApiTelegramException
 
 
 # ============================================================
@@ -1674,9 +1675,28 @@ if __name__ == "__main__":
         logger.exception("Не удалось удалить webhook")
 
     logger.info("VoicePlan запущен")
-    bot.infinity_polling(
-        timeout=30,
-        long_polling_timeout=30,
-        skip_pending=True,
-    )
+
+    # 409 Conflict возникает, если параллельно работает другой инстанс с тем же
+    # токеном (деплой на Render поверх старого процесса, второй сервис, локальный
+    # запуск). Вместо падения ждём, пока «соперник» завершится, и пробуем снова.
+    while True:
+        try:
+            bot.infinity_polling(
+                timeout=30,
+                long_polling_timeout=30,
+                skip_pending=True,
+            )
+            break  # infinity_polling в норме не возвращается — но на всякий случай
+        except ApiTelegramException as e:
+            if "409" in str(e) or "Conflict" in str(e):
+                logger.warning(
+                    "409 Conflict: другой инстанс бота ещё опрашивает Telegram, "
+                    "жду 15 секунд и повторяю…"
+                )
+                time.sleep(15)
+                continue
+            raise
+        except Exception:
+            logger.exception("Polling упал, повтор через 10 секунд…")
+            time.sleep(10)
 
