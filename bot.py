@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import base64
 import uuid
 import calendar as calmod
 import sqlite3
@@ -79,6 +80,11 @@ LLM_PRICE_IN_RUB = float(os.environ.get("LLM_PRICE_IN_RUB_PER_1M", "15"))
 LLM_PRICE_OUT_RUB = float(os.environ.get("LLM_PRICE_OUT_RUB_PER_1M", "60"))
 WHISPER_PRICE_RUB_PER_MIN = float(os.environ.get("WHISPER_PRICE_RUB_PER_MIN", "1.5"))
 
+# Нейросети нового интерфейса: чат и картинки (модели и цены настраиваются в env).
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "gpt-4o-mini")
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-1")
+IMAGE_PRICE_RUB = float(os.environ.get("IMAGE_PRICE_RUB", "3"))
+
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Не задана переменная TELEGRAM_BOT_TOKEN")
 
@@ -98,9 +104,9 @@ LANGS = {
     "ru": {
         "welcome": (
             "👋 Здравствуйте, {name}!\n\n"
-            "Я — VoicePlan, голосовой планер. Отправьте голосовое или напишите дела — "
-            "я разделю их на задачи и события.\n\n"
-            "🎁 Бесплатных голосовых разборов осталось: {free}."
+            "Я — VoicePlan: чат с ИИ, генерация картинок и голосовой планировщик задач — "
+            "в одном боте. Выберите действие в меню внизу.\n\n"
+            "🎁 Бесплатных попыток осталось: {free}."
         ),
         "btn_tasks": "📋 Мои задачи",
         "btn_events": "📅 События",
@@ -108,7 +114,7 @@ LANGS = {
         "btn_new_cat": "➕ Новая папка",
         "btn_settings": "⚙️ Настройки",
         "btn_language": "🌐 Язык / Language",
-        "btn_premium": "⭐ Лимит",
+        "btn_premium": "💎 Подписка",
         "btn_support": "💬 Поддержка",
         "btn_done": "✅ Сделано",
         "btn_undone": "↩️ Вернуть",
@@ -158,14 +164,72 @@ LANGS = {
         "cal_today": "📍 Сегодня",
         "free_usage": "Формат: /free 10 — начислить попытки себе.\nБез аргументов — показать остаток.",
         "free_added": "🎁 Начислено попыток: +{count}. Всего теперь: {free}.",
+        "btn_chat": "💬 Чат с ИИ",
+        "btn_image": "🎨 Картинки",
+        "btn_video": "🎬 Видео",
+        "btn_oferta": "📖 Оферта",
+        "btn_exit_chat": "↩️ Выйти из чата",
+        "oferta_accept_btn": "✅ Принимаю условия",
+        "oferta_required": (
+            "⚠️ Чтобы пользоваться ботом, сначала примите условия оферты — "
+            "нажмите кнопку ниже."
+        ),
+        "oferta_accepted_msg": "✅ Условия приняты! Добро пожаловать 🎉",
+        "oferta_text": (
+            "📜 УСЛОВИЯ ПУБЛИЧНОЙ ОФЕРТЫ\n\n"
+            "1. Сервис — ИИ-ассистент VoicePlan: чат с нейросетью, генерация картинок, "
+            "планировщик задач и календарь с напоминаниями.\n"
+            "2. Бесплатно: новым пользователям доступно ограниченное число попыток. "
+            "Подписка снимает лимиты.\n"
+            "3. Подписка оплачивается через Telegram Stars (раздел «💎 Подписка»). "
+            "Автопродления нет — каждый период оплачивается отдельно.\n"
+            "4. Возврат — по обращению в поддержку: если сервис не использовался, "
+            "возвращаем полностью; при сбоях сервиса срок подписки продлевается.\n"
+            "5. Ответы ИИ носят информационный характер и не заменяют профессиональную "
+            "консультацию.\n"
+            "6. Данные (имя, ID, тексты запросов) используются только для работы сервиса "
+            "и передаются его провайдерам (Telegram, ИИ-API). Рекламе третьих лиц "
+            "не продаются.\n"
+            "7. Запрещено: противоправные цели, спам, обход лимитов. За нарушение "
+            "доступ может быть ограничен.\n"
+            "8. Сервис предоставляется «как есть», возможны перерывы в работе.\n"
+            "9. Поддержка: {contact}.\n\n"
+            "Нажимая «Принимаю условия», вы подтверждаете согласие (акцепт публичной "
+            "оферты по ст. 437 ГК РФ) и начинаете пользоваться сервисом."
+        ),
+        "chat_started": (
+            "💬 Чат с ИИ включён — задавайте вопрос.\n"
+            "Выйти: кнопка «↩️ Выйти из чата» или любая кнопка меню."
+        ),
+        "chat_exited": "✅ Чат закрыт. Отправляйте планы — разберу на задачи и события.",
+        "image_started": "🎨 Пришлите описание картинки одним сообщением — нарисую.",
+        "image_generating": "🎨 Генерирую картинку…",
+        "image_done": "🎨 Готово! Потрачена 1 попытка, осталось: {free}.",
+        "tries_limit": (
+            "⛔ Бесплатные попытки закончились.\n"
+            "Подписка снимает лимиты — раздел «💎 Подписка». "
+            "Проверить баланс: /free"
+        ),
+        "video_stub": "🎬 Генерация видео уже в разработке — появится здесь совсем скоро!",
+        "premium_menu": (
+            "💎 Подписка VoicePlan\n\n"
+            "⭐ Telegram Stars — 199 XTR / месяц\n"
+            "💳 Банковская карта (ЮKassa) — скоро\n\n"
+            "Что входит:\n"
+            "• безлимитный чат с ИИ\n"
+            "• картинки без лимита\n"
+            "• задачи, календарь и напоминания\n\n"
+            "Бесплатных попыток осталось: {free}."
+        ),
+        "yookassa_stub": "💳 Оплата через ЮKassa пока не подключена. Совсем скоро!",
         "report_usage": "Формат отчёта:\n/report 01.10.2026 10:00 05.10.2026 23:59\nили без времени: /report 01.10 05.10",
     },
     "en": {
         "welcome": (
             "👋 Hello, {name}!\n\n"
-            "I’m VoicePlan, your voice planner. Send a voice note or type your plans — "
-            "I’ll sort them into tasks and events.\n\n"
-            "🎁 Free voice analyses left: {free}."
+            "I’m VoicePlan: AI chat, image generation and a voice task planner — "
+            "all in one bot. Pick an action from the menu below.\n\n"
+            "🎁 Free attempts left: {free}."
         ),
         "btn_tasks": "📋 My tasks",
         "btn_events": "📅 Events",
@@ -173,7 +237,7 @@ LANGS = {
         "btn_new_cat": "➕ New folder",
         "btn_settings": "⚙️ Settings",
         "btn_language": "🌐 Language / Язык",
-        "btn_premium": "⭐ Limits",
+        "btn_premium": "💎 Subscription",
         "btn_support": "💬 Support",
         "btn_done": "✅ Done",
         "btn_undone": "↩️ Undo",
@@ -223,6 +287,63 @@ LANGS = {
         "cal_today": "📍 Today",
         "free_usage": "Format: /free 10 — add attempts to yourself.\nWithout arguments — show balance.",
         "free_added": "🎁 Attempts added: +{count}. Balance: {free}.",
+        "btn_chat": "💬 AI Chat",
+        "btn_image": "🎨 Images",
+        "btn_video": "🎬 Video",
+        "btn_oferta": "📖 Terms",
+        "btn_exit_chat": "↩️ Exit chat",
+        "oferta_accept_btn": "✅ I accept the terms",
+        "oferta_required": (
+            "⚠️ To use the bot, please accept the terms of the offer first — "
+            "tap the button below."
+        ),
+        "oferta_accepted_msg": "✅ Terms accepted! Welcome 🎉",
+        "oferta_text": (
+            "📜 PUBLIC OFFER TERMS\n\n"
+            "1. The service is the VoicePlan AI assistant: AI chat, image generation, "
+            "task planner and calendar with reminders.\n"
+            "2. Free tier: new users get a limited number of attempts. "
+            "A subscription removes the limits.\n"
+            "3. The subscription is paid via Telegram Stars (see “💎 Subscription”). "
+            "No auto-renewal — each period is paid separately.\n"
+            "4. Refunds — contact support: if the service was not used, you get a "
+            "full refund; during service outages the subscription period is extended.\n"
+            "5. AI answers are for information only and are not professional advice.\n"
+            "6. Data (name, ID, request texts) is used solely to operate the service "
+            "and is passed to its providers (Telegram, AI API). It is never sold to "
+            "third-party advertisers.\n"
+            "7. Prohibited: illegal activity, spam, circumventing limits. Access may "
+            "be restricted for violations.\n"
+            "8. The service is provided “as is”; downtime may occur.\n"
+            "9. Support: {contact}.\n\n"
+            "By tapping “I accept the terms” you accept this public offer "
+            "(Art. 437 of the Civil Code) and start using the service."
+        ),
+        "chat_started": (
+            "💬 AI chat is on — ask anything.\n"
+            "To leave: tap “↩️ Exit chat” or any menu button."
+        ),
+        "chat_exited": "✅ Chat closed. Send your plans — I’ll split them into tasks and events.",
+        "image_started": "🎨 Send a description of the image in one message — I’ll draw it.",
+        "image_generating": "🎨 Generating an image…",
+        "image_done": "🎨 Done! 1 attempt used, remaining: {free}.",
+        "tries_limit": (
+            "⛔ Free attempts are used up.\n"
+            "A subscription removes limits — see “💎 Subscription”. "
+            "Check balance: /free"
+        ),
+        "video_stub": "🎬 Video generation is coming very soon!",
+        "premium_menu": (
+            "💎 VoicePlan Subscription\n\n"
+            "⭐ Telegram Stars — 199 XTR / month\n"
+            "💳 Bank card (YooKassa) — coming soon\n\n"
+            "Includes:\n"
+            "• unlimited AI chat\n"
+            "• unlimited images\n"
+            "• tasks, calendar and reminders\n\n"
+            "Free attempts left: {free}."
+        ),
+        "yookassa_stub": "💳 YooKassa payments are not connected yet. Coming soon!",
         "report_usage": "Report format:\n/report 01.10.2026 10:00 05.10.2026 23:59\nor without time: /report 01.10 05.10",
     },
 }
@@ -295,6 +416,7 @@ def init_db():
                 "reminder_offsets": "TEXT DEFAULT '[]'",
                 "voice_replies": "INTEGER DEFAULT 0",
                 "created_at": "TEXT",
+                "oferta_accepted": "INTEGER DEFAULT 0",
             }
             for column, definition in migrations.items():
                 if column not in cols:
@@ -438,6 +560,59 @@ def get_user_data(uid):
             conn.close()
 
 
+def oferta_ok(uid):
+    """Принял ли пользователь условия оферты (админ — всегда «да»)."""
+    if uid == ADMIN_ID:
+        return True
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT oferta_accepted FROM users WHERE user_id = ?", (uid,)
+            ).fetchone()
+            return bool(row and row["oferta_accepted"])
+        finally:
+            conn.close()
+
+
+def send_oferta_prompt(chat_id, uid):
+    """Отправляет текст оферты с кнопкой принятия."""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "oferta_accept_btn"), callback_data="oferta:accept"
+        )
+    )
+    bot.send_message(
+        chat_id,
+        tr(uid, "oferta_required") + "\n\n" + tr(uid, "oferta_text", contact=SUPPORT_CONTACT),
+        reply_markup=markup,
+    )
+
+
+def oferta_gate(message):
+    """True — можно работать; иначе отправляет оферту и блокирует действие."""
+    uid = message.from_user.id
+    if oferta_ok(uid):
+        return True
+    send_oferta_prompt(message.chat.id, uid)
+    return False
+
+
+def consume_attempt(uid):
+    """Списать одну бесплатную попытку."""
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "UPDATE users SET free_voice_left = MAX(free_voice_left - 1, 0) WHERE user_id=?",
+                (uid,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def get_user_preferences(uid):
     with db_lock:
         conn = get_db()
@@ -526,12 +701,19 @@ def log_activity(uid):
         logger.exception("Не удалось записать активность пользователя")
 
 
-def log_ai_request(uid, kind, prompt_tokens=0, completion_tokens=0, audio_seconds=0):
-    """Запрос к ИИ + его стоимость в рублях (для отчёта)."""
-    cost = (float(prompt_tokens) / 1_000_000) * LLM_PRICE_IN_RUB
-    cost += (float(completion_tokens) / 1_000_000) * LLM_PRICE_OUT_RUB
-    if audio_seconds:
-        cost += (float(audio_seconds) / 60.0) * WHISPER_PRICE_RUB_PER_MIN
+def log_ai_request(uid, kind, prompt_tokens=0, completion_tokens=0, audio_seconds=0, cost_rub=None):
+    """Запрос к ИИ + его стоимость в рублях (для отчёта).
+
+    cost_rub — задать напрямую, если у запроса фиксированная цена
+    (например, генерация картинки), а не расчёт по токенам.
+    """
+    if cost_rub is not None:
+        cost = float(cost_rub)
+    else:
+        cost = (float(prompt_tokens) / 1_000_000) * LLM_PRICE_IN_RUB
+        cost += (float(completion_tokens) / 1_000_000) * LLM_PRICE_OUT_RUB
+        if audio_seconds:
+            cost += (float(audio_seconds) / 60.0) * WHISPER_PRICE_RUB_PER_MIN
     try:
         with db_lock:
             conn = get_db()
@@ -561,24 +743,32 @@ def log_ai_request(uid, kind, prompt_tokens=0, completion_tokens=0, audio_second
 # ============================================================
 
 def main_keyboard(uid):
+    """Главное меню: сначала ИИ-функции (как у конкурентов), ниже — изюминка (планер)."""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
-        types.KeyboardButton(tr(uid, "btn_tasks")),
-        types.KeyboardButton(tr(uid, "btn_events")),
+        types.KeyboardButton(tr(uid, "btn_chat")),
+        types.KeyboardButton(tr(uid, "btn_image")),
     )
     markup.add(
-        types.KeyboardButton(tr(uid, "btn_folders")),
-        types.KeyboardButton(tr(uid, "btn_new_cat")),
-    )
-    markup.add(
-        types.KeyboardButton(tr(uid, "btn_settings")),
+        types.KeyboardButton(tr(uid, "btn_video")),
         types.KeyboardButton(tr(uid, "btn_premium")),
     )
     markup.add(
-        types.KeyboardButton(tr(uid, "btn_support")),
-        types.KeyboardButton(tr(uid, "btn_language")),
+        types.KeyboardButton(tr(uid, "btn_tasks")),
+        types.KeyboardButton(tr(uid, "btn_calendar")),
     )
-    markup.add(types.KeyboardButton(tr(uid, "btn_calendar")))
+    markup.add(
+        types.KeyboardButton(tr(uid, "btn_folders")),
+        types.KeyboardButton(tr(uid, "btn_settings")),
+    )
+    markup.add(
+        types.KeyboardButton(tr(uid, "btn_support")),
+        types.KeyboardButton(tr(uid, "btn_oferta")),
+    )
+    markup.add(
+        types.KeyboardButton(tr(uid, "btn_language")),
+        types.KeyboardButton(tr(uid, "btn_events")),
+    )
     return markup
 
 
@@ -595,6 +785,12 @@ def language_keyboard():
 def handle_start(message):
     register_user(message)
     user_states.pop(message.from_user.id, None)
+
+    # Первый контакт: показываем публичную оферту, пока она не принята.
+    if not oferta_ok(message.from_user.id):
+        send_oferta_prompt(message.chat.id, message.from_user.id)
+        return
+
     free, _premium = get_user_data(message.from_user.id)
     bot.send_message(
         message.chat.id,
@@ -1574,6 +1770,8 @@ def send_answer(uid, text):
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     uid = message.from_user.id
+    if not oferta_gate(message):
+        return
     log_activity(uid)
     free, premium = get_user_data(uid)
 
@@ -1637,6 +1835,9 @@ def handle_plain_text(message):
     if not text:
         return
 
+    if not oferta_gate(message):
+        return
+
     log_activity(uid)
 
     # Ввод часового пояса.
@@ -1681,6 +1882,67 @@ def handle_plain_text(message):
 
         user_states.pop(uid, None)
         bot.send_message(uid, tr(uid, "category_saved", name=text), reply_markup=main_keyboard(uid))
+        return
+
+    # Режим «💬 Чат с ИИ»: обычный вопрос — ответ текстовой нейросети.
+    if user_states.get(uid) == "chat":
+        free, premium = get_user_data(uid)
+        if free <= 0 and not premium:
+            bot.reply_to(message, tr(uid, "tries_limit"))
+            return
+
+        status = bot.reply_to(message, tr(uid, "processing"))
+        try:
+            answer = ai_chat_reply(uid, text)
+            consume_attempt(uid)
+            try:
+                bot.delete_message(message.chat.id, status.message_id)
+            except Exception:
+                pass
+
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton(
+                    tr(uid, "btn_exit_chat"), callback_data="chat:exit"
+                )
+            )
+            # Сообщение Telegram не длиннее 4096 символов — режем на части.
+            for start in range(0, len(answer), 4000):
+                chunk = answer[start:start + 4000]
+                bot.send_message(
+                    message.chat.id,
+                    chunk,
+                    reply_markup=markup if start + 4000 >= len(answer) else None,
+                )
+        except Exception:
+            logger.exception("AI chat failed for user %s", uid)
+            bot.send_message(message.chat.id, tr(uid, "api_error"))
+        return
+
+    # Режим «🎨 Картинки»: текст — промпт для генерации изображения.
+    if user_states.get(uid) == "image_prompt":
+        free, premium = get_user_data(uid)
+        if free <= 0 and not premium:
+            bot.reply_to(message, tr(uid, "tries_limit"))
+            return
+
+        status = bot.reply_to(message, tr(uid, "image_generating"))
+        try:
+            photo = generate_image(uid, text)
+            consume_attempt(uid)
+            free_after, _ = get_user_data(uid)
+            try:
+                bot.delete_message(message.chat.id, status.message_id)
+            except Exception:
+                pass
+            bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=tr(uid, "image_done", free=free_after),
+            )
+        except Exception:
+            logger.exception("Image generation failed for user %s", uid)
+            bot.send_message(message.chat.id, tr(uid, "api_error"))
         return
 
     status = bot.reply_to(message, tr(uid, "processing"))
@@ -1785,10 +2047,19 @@ def settings_command(message):
 def premium_command(message):
     uid = message.from_user.id
     free, premium = get_user_data(uid)
+    markup = types.InlineKeyboardMarkup()
+    markup.row(
+        types.InlineKeyboardButton("⭐ Stars — 199 XTR", callback_data="buy_stars"),
+        types.InlineKeyboardButton("💳 ЮKassa", callback_data="pay_yookassa"),
+    )
+    markup.add(
+        types.InlineKeyboardButton("📖 Оферта / Terms", callback_data="oferta:show")
+    )
     status = "Premium" if premium else "Basic"
     bot.send_message(
         message.chat.id,
-        tr(uid, "premium", free=free) + f"\nStatus: {status}",
+        tr(uid, "premium_menu", free=free) + f"\nStatus: {status}",
+        reply_markup=markup,
     )
 
 
@@ -1808,6 +2079,10 @@ def text_router(message):
     uid = message.from_user.id
     text = message.text
 
+    # Публичная оферта должна быть принята до любых действий.
+    if not oferta_gate(message):
+        return
+
     menu_texts = {
         value
         for language in LANGS.values()
@@ -1816,6 +2091,36 @@ def text_router(message):
     }
 
     if text in menu_texts:
+        chat_buttons = {LANGS["ru"]["btn_chat"], LANGS["en"]["btn_chat"]}
+        image_buttons = {LANGS["ru"]["btn_image"], LANGS["en"]["btn_image"]}
+
+        # Любая другая кнопка меню завершает режимы чата и картинки.
+        if (
+            text not in chat_buttons | image_buttons
+            and user_states.get(uid) in {"chat", "image_prompt"}
+        ):
+            user_states.pop(uid, None)
+
+        if text in chat_buttons:
+            user_states[uid] = "chat"
+            bot.send_message(
+                message.chat.id, tr(uid, "chat_started"), reply_markup=main_keyboard(uid)
+            )
+            return
+        if text in image_buttons:
+            user_states[uid] = "image_prompt"
+            bot.send_message(
+                message.chat.id, tr(uid, "image_started"), reply_markup=main_keyboard(uid)
+            )
+            return
+        if text in {LANGS["ru"]["btn_video"], LANGS["en"]["btn_video"]}:
+            bot.send_message(
+                message.chat.id, tr(uid, "video_stub"), reply_markup=main_keyboard(uid)
+            )
+            return
+        if text in {LANGS["ru"]["btn_oferta"], LANGS["en"]["btn_oferta"]}:
+            send_oferta_prompt(message.chat.id, uid)
+            return
         if text in {LANGS["ru"]["btn_tasks"], LANGS["en"]["btn_tasks"]}:
             return show_tasks(message)
         if text in {LANGS["ru"]["btn_events"], LANGS["en"]["btn_events"]}:
@@ -2164,6 +2469,143 @@ def successful_payment(message):
             )
         except Exception:
             logger.exception("Не удалось уведомить администратора об оплате")
+
+
+# ============================================================
+# 15-bis. ИИ-ЧАТ, КАРТИНКИ И CALLBACKS НОВОГО ИНТЕРФЕЙСА
+# ============================================================
+
+def ai_chat_reply(uid, text):
+    """Ответ текстовой нейросети (модель CHAT_MODEL через OpenAI-совместимый API)."""
+    if get_user_lang(uid) == "en":
+        system_prompt = (
+            "You are a friendly assistant inside the VoicePlan Telegram bot. "
+            "Answer in the user's language, briefly and to the point "
+            "(about 700 characters), without markdown headers."
+        )
+    else:
+        system_prompt = (
+            "Ты — дружелюбный ассистент внутри Telegram-бота VoicePlan. "
+            "Отвечай на языке пользователя, кратко и по существу "
+            "(до 700 символов), без markdown-заголовков."
+        )
+
+    response = requests.post(
+        f"{AI_BASE_URL}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {AI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": CHAT_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text},
+            ],
+            "max_tokens": 1200,
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+    data = response.json()
+    usage = data.get("usage") or {}
+    log_ai_request(
+        uid,
+        "chat",
+        prompt_tokens=usage.get("prompt_tokens", 0),
+        completion_tokens=usage.get("completion_tokens", 0),
+    )
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def generate_image(uid, prompt):
+    """Генерация картинки (модель IMAGE_MODEL) → bytes."""
+    response = requests.post(
+        f"{AI_BASE_URL}/images/generations",
+        headers={
+            "Authorization": f"Bearer {AI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": IMAGE_MODEL,
+            "prompt": prompt,
+            "n": 1,
+            "size": "1024x1024",
+        },
+        timeout=300,
+    )
+    response.raise_for_status()
+    item = response.json()["data"][0]
+
+    if item.get("b64_json"):
+        raw = base64.b64decode(item["b64_json"])
+    elif item.get("url"):
+        download = requests.get(item["url"], timeout=180)
+        download.raise_for_status()
+        raw = download.content
+    else:
+        raise RuntimeError("В ответе images API нет ни b64_json, ни url")
+
+    log_ai_request(uid, "image", cost_rub=IMAGE_PRICE_RUB)
+    return raw
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "oferta:accept")
+def oferta_accept(call):
+    uid = call.from_user.id
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            conn.execute(
+                "UPDATE users SET oferta_accepted=1 WHERE user_id=?", (uid,)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    bot.answer_callback_query(call.id, text="✅")
+
+    free, _premium = get_user_data(uid)
+    bot.send_message(call.message.chat.id, tr(uid, "oferta_accepted_msg"))
+    bot.send_message(
+        call.message.chat.id,
+        tr(uid, "welcome", name=call.from_user.first_name or "друг", free=free),
+        reply_markup=main_keyboard(uid),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "oferta:show")
+def oferta_show(call):
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        call.message.chat.id,
+        tr(call.from_user.id, "oferta_text", contact=SUPPORT_CONTACT),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "chat:exit")
+def chat_exit(call):
+    uid = call.from_user.id
+    user_states.pop(uid, None)
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        call.message.chat.id, tr(uid, "chat_exited"), reply_markup=main_keyboard(uid)
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "pay_yookassa")
+def pay_yookassa(call):
+    """Заглушка: подключение ЮKassa будет позже."""
+    bot.answer_callback_query(
+        call.id,
+        text=tr(call.from_user.id, "yookassa_stub"),
+        show_alert=True,
+    )
 
 
 # ============================================================
