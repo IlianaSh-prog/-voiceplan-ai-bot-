@@ -88,6 +88,19 @@ CHAT_MODEL = os.environ.get("CHAT_MODEL", "gpt-4o-mini")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-1")
 IMAGE_PRICE_RUB = float(os.environ.get("IMAGE_PRICE_RUB", "3"))
 
+# Балансная модель: цены для пользователя и дневные бесплатные нормы.
+PRICE_CHAT_RUB = float(os.environ.get("PRICE_CHAT_RUB", "1"))
+PRICE_IMAGE_RUB = float(os.environ.get("PRICE_IMAGE_RUB", "5"))
+PRICE_TTS_RUB_PER_1K = float(os.environ.get("PRICE_TTS_RUB_PER_1K", "1"))
+FREE_CHATS_PER_DAY = int(os.environ.get("FREE_CHATS_PER_DAY", "3"))
+FREE_IMAGES_PER_DAY = int(os.environ.get("FREE_IMAGES_PER_DAY", "1"))
+# Пробные озвучки выдаются один раз при подключении (не ежедневно).
+FREE_TTS_TRIES = int(os.environ.get("FREE_TTS_TRIES", "3"))
+# Пакеты пополнения через Telegram Stars: (сумма ₽, бонус %).
+# «Серию дней» и другие ежедневные подарки сознательно не делаем —
+# постоянные списания «в подарок» невыгодны при бесплатных пользователях.
+TOPUP_PACKAGES = ((199, 0), (490, 5), (990, 10))
+
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Не задана переменная TELEGRAM_BOT_TOKEN")
 
@@ -109,7 +122,8 @@ LANGS = {
             "👋 Здравствуйте, {name}!\n\n"
             "Я — VoicePlan: чат с ИИ, генерация картинок и голосовой планировщик задач — "
             "в одном боте. Выберите действие в меню внизу.\n\n"
-            "🎁 Бесплатных попыток осталось: {free}."
+            "🆓 Бесплатно сегодня: чат {chats}, картинки {images}.\n"
+            "💰 Баланс: {total} ₽."
         ),
         "btn_tasks": "📋 Мои задачи",
         "btn_events": "📅 События",
@@ -117,7 +131,7 @@ LANGS = {
         "btn_new_cat": "➕ Новая папка",
         "btn_settings": "⚙️ Настройки",
         "btn_language": "🌐 Язык / Language",
-        "btn_premium": "💎 Подписка",
+        "btn_premium": "💎 Баланс и оплата",
         "btn_support": "💬 Поддержка",
         "btn_done": "✅ Сделано",
         "btn_undone": "↩️ Вернуть",
@@ -182,12 +196,14 @@ LANGS = {
             "📜 УСЛОВИЯ ПУБЛИЧНОЙ ОФЕРТЫ\n\n"
             "1. Сервис — ИИ-ассистент VoicePlan: чат с нейросетью, генерация картинок, "
             "планировщик задач и календарь с напоминаниями.\n"
-            "2. Бесплатно: новым пользователям доступно ограниченное число попыток. "
-            "Подписка снимает лимиты.\n"
-            "3. Подписка оплачивается через Telegram Stars (раздел «💎 Подписка»). "
-            "Автопродления нет — каждый период оплачивается отдельно.\n"
-            "4. Возврат — по обращению в поддержку: если сервис не использовался, "
-            "возвращаем полностью; при сбоях сервиса срок подписки продлевается.\n"
+            "2. Бесплатно: новые пользователи получают дневные лимиты чата и картинок "
+            "и пробные озвучки; лимиты обновляются 1 раз в день. Планировщик, задачи "
+            "и календарь — без лимитов.\n"
+            "3. Платные функции (чат, картинки, озвучка) оплачиваются балансом через "
+            "Telegram Stars в разделе «💎 Баланс и оплата». Автопродления нет — "
+            "баланс пополняется по желанию.\n"
+            "4. Возврат — по обращению в поддержку: неиспользованный баланс "
+            "возвращаем полностью; при сбоях сервиса обращайтесь в поддержку.\n"
             "5. Ответы ИИ носят информационный характер и не заменяют профессиональную "
             "консультацию.\n"
             "6. Данные (имя, ID, тексты запросов) используются только для работы сервиса "
@@ -207,23 +223,80 @@ LANGS = {
         "chat_exited": "✅ Чат закрыт. Отправляйте планы — разберу на задачи и события.",
         "image_started": "🎨 Пришлите описание картинки одним сообщением — нарисую.",
         "image_generating": "🎨 Генерирую картинку…",
-        "image_done": "🎨 Готово! Потрачена 1 попытка, осталось: {free}.",
+        "image_done": "🎨 Готово! Бесплатных картинок сегодня осталось: {left}.",
+        "image_done_paid": "🎨 Готово!",
         "tries_limit": (
-            "⛔ Бесплатные попытки закончились.\n"
-            "Подписка снимает лимиты — раздел «💎 Подписка». "
-            "Проверить баланс: /free"
+            "⛔ Бесплатные попытки на сегодня закончились, а баланс пуст.\n"
+            "Проверьте баланс — кнопка ниже. "
+            "Бесплатные возможности обновляются 1 раз в день."
+        ),
+        "bal_open": "💰 Посмотреть баланс",
+        "balance_text": (
+            "💰 Баланс\n"
+            "Всего: {total} ₽\n"
+            "Платный: {paid} ₽\n"
+            "Бонусный: {bonus} ₽\n\n"
+            "🆓 Бесплатно сегодня:\n"
+            "• Чат: {chats} из {chats_max}\n"
+            "• Картинки: {images} из {images_max}\n"
+            "• Пробные озвучки: {tts_free}\n\n"
+            "Бесплатные возможности обновляются 1 раз в день.\n"
+            "Цены: чат {price_chat} ₽, картинка {price_image} ₽, "
+            "озвучка {price_tts} ₽/1000 знаков.\n"
+            "Планировщик, задачи и календарь — бесплатно навсегда."
+        ),
+        "bal_topup": "💰 Пополнить баланс",
+        "bal_free_gift": "🎁 Получить баланс Бесплатно",
+        "bal_how": "ℹ️ Как работает баланс",
+        "bal_save": "💡 Как экономить баланс",
+        "bal_spends_on": "✅ Показывать списания — выключить",
+        "bal_spends_off": "🔕 Показывать списания — включить",
+        "bal_close": "❌ Закрыть",
+        "bal_back": "⬅️ Назад",
+        "popular": "🔥 ПОПУЛЯРНОЕ",
+        "topup_title": (
+            "💰 Пополнение баланса\n"
+            "Выберите пакет (оплата через Telegram Stars):"
+        ),
+        "topup_done": (
+            "✅ На баланс зачислено {amount} ₽ (+{bonus} ₽ бонуса).\n"
+            "Всего: {total} ₽"
+        ),
+        "free_gift_text": (
+            "🎁 Бесплатно:\n"
+            "• Каждый день: {chats} чата и {images} картинка — "
+            "обновляются 1 раз в день.\n"
+            "• Новым пользователям: {tts} пробные озвучки ответов.\n"
+            "• Планировщик, задачи и календарь — всегда бесплатно."
+        ),
+        "how_balance_text": (
+            "ℹ️ Как работает баланс:\n"
+            "• Чат — {price_chat} ₽, картинка — {price_image} ₽, "
+            "озвучка — {price_tts} ₽/1000 знаков.\n"
+            "• Сначала тратится бесплатная дневная норма, затем бонусный "
+            "баланс, затем платный.\n"
+            "• Бесплатные возможности обновляются 1 раз в день.\n"
+            "• Планировщик — бесплатно навсегда."
+        ),
+        "save_balance_text": (
+            "💡 Как экономить баланс:\n"
+            "• Ловите дневную бесплатную норму: {chats} чата и {images} "
+            "картинка каждый день.\n"
+            "• Пишите вопросы коротко и по делу.\n"
+            "• Озвучку включайте только когда нужно слушать.\n"
+            "• Задачи и планы ведите в планировщике — он бесплатен."
+        ),
+        "spends_on": "✅ Списания теперь показываются",
+        "spends_off": "🔕 Списания больше не показываются",
+        "spend_receipt": "💳 Списано {amount} ₽ ({what}). Остаток: {total} ₽.",
+        "spend_chat": "чат",
+        "spend_image": "картинка",
+        "spend_tts": "озвучка",
+        "tts_locked": (
+            "🔇 Пробные озвучки закончились. Озвучка включится при "
+            "положительном балансе ({price} ₽/1000 знаков)."
         ),
         "video_stub": "🎬 Генерация видео уже в разработке — появится здесь совсем скоро!",
-        "premium_menu": (
-            "💎 Подписка VoicePlan\n\n"
-            "⭐ Telegram Stars — 199 XTR / месяц\n"
-            "💳 Банковская карта (ЮKassa) — скоро\n\n"
-            "Что входит:\n"
-            "• безлимитный чат с ИИ\n"
-            "• картинки без лимита\n"
-            "• задачи, календарь и напоминания\n\n"
-            "Бесплатных попыток осталось: {free}."
-        ),
         "yookassa_stub": "💳 Оплата через ЮKassa пока не подключена. Совсем скоро!",
         "btn_planner": "📋 Задачи и календарь",
         "nav_folders": "📂 Папки",
@@ -239,7 +312,8 @@ LANGS = {
             "👋 Hello, {name}!\n\n"
             "I’m VoicePlan: AI chat, image generation and a voice task planner — "
             "all in one bot. Pick an action from the menu below.\n\n"
-            "🎁 Free attempts left: {free}."
+            "🆓 Free today: chat {chats}, images {images}.\n"
+            "💰 Balance: {total} RUB."
         ),
         "btn_tasks": "📋 My tasks",
         "btn_events": "📅 Events",
@@ -247,7 +321,7 @@ LANGS = {
         "btn_new_cat": "➕ New folder",
         "btn_settings": "⚙️ Settings",
         "btn_language": "🌐 Language / Язык",
-        "btn_premium": "💎 Subscription",
+        "btn_premium": "💎 Balance & pay",
         "btn_support": "💬 Support",
         "btn_done": "✅ Done",
         "btn_undone": "↩️ Undo",
@@ -312,12 +386,14 @@ LANGS = {
             "📜 PUBLIC OFFER TERMS\n\n"
             "1. The service is the VoicePlan AI assistant: AI chat, image generation, "
             "task planner and calendar with reminders.\n"
-            "2. Free tier: new users get a limited number of attempts. "
-            "A subscription removes the limits.\n"
-            "3. The subscription is paid via Telegram Stars (see “💎 Subscription”). "
-            "No auto-renewal — each period is paid separately.\n"
-            "4. Refunds — contact support: if the service was not used, you get a "
-            "full refund; during service outages the subscription period is extended.\n"
+            "2. Free tier: new users get daily chat and image quotas plus trial "
+            "voice replies; quotas refresh once a day. Planner, tasks and "
+            "calendar are unlimited.\n"
+            "3. Paid features (chat, images, voice replies) are paid from your "
+            "balance via Telegram Stars in “💎 Balance & pay”. No auto-renewal — "
+            "you top up when you want.\n"
+            "4. Refunds — contact support: an unused balance is refunded in full; "
+            "during service outages please contact support.\n"
             "5. AI answers are for information only and are not professional advice.\n"
             "6. Data (name, ID, request texts) is used solely to operate the service "
             "and is passed to its providers (Telegram, AI API). It is never sold to "
@@ -336,23 +412,80 @@ LANGS = {
         "chat_exited": "✅ Chat closed. Send your plans — I’ll split them into tasks and events.",
         "image_started": "🎨 Send a description of the image in one message — I’ll draw it.",
         "image_generating": "🎨 Generating an image…",
-        "image_done": "🎨 Done! 1 attempt used, remaining: {free}.",
+        "image_done": "🎨 Done! Free images left today: {left}.",
+        "image_done_paid": "🎨 Done!",
         "tries_limit": (
-            "⛔ Free attempts are used up.\n"
-            "A subscription removes limits — see “💎 Subscription”. "
-            "Check balance: /free"
+            "⛔ Free attempts for today are used up and the balance is empty.\n"
+            "Check your balance — the button below. "
+            "Free features refresh once a day."
+        ),
+        "bal_open": "💰 View balance",
+        "balance_text": (
+            "💰 Balance\n"
+            "Total: {total} RUB\n"
+            "Paid: {paid} RUB\n"
+            "Bonus: {bonus} RUB\n\n"
+            "🆓 Free today:\n"
+            "• Chat: {chats} of {chats_max}\n"
+            "• Images: {images} of {images_max}\n"
+            "• Trial voice replies: {tts_free}\n\n"
+            "Free features refresh once a day.\n"
+            "Prices: chat {price_chat} RUB, image {price_image} RUB, "
+            "voice {price_tts} RUB/1000 characters.\n"
+            "Planner, tasks and calendar — free forever."
+        ),
+        "bal_topup": "💰 Top up balance",
+        "bal_free_gift": "🎁 Get balance for free",
+        "bal_how": "ℹ️ How the balance works",
+        "bal_save": "💡 How to save balance",
+        "bal_spends_on": "✅ Show charges — turn off",
+        "bal_spends_off": "🔕 Show charges — turn on",
+        "bal_close": "❌ Close",
+        "bal_back": "⬅️ Back",
+        "popular": "🔥 POPULAR",
+        "topup_title": (
+            "💰 Top up your balance\n"
+            "Choose a package (paid via Telegram Stars):"
+        ),
+        "topup_done": (
+            "✅ {amount} RUB added to your balance (+{bonus} RUB bonus).\n"
+            "Total: {total} RUB"
+        ),
+        "free_gift_text": (
+            "🎁 Free:\n"
+            "• Every day: {chats} chats and {images} image — "
+            "refreshes once a day.\n"
+            "• New users get {tts} trial voice replies.\n"
+            "• Planner, tasks and calendar — always free."
+        ),
+        "how_balance_text": (
+            "ℹ️ How the balance works:\n"
+            "• Chat — {price_chat} RUB, image — {price_image} RUB, "
+            "voice — {price_tts} RUB/1000 characters.\n"
+            "• The free daily quota is used first, then the bonus "
+            "balance, then the paid balance.\n"
+            "• Free features refresh once a day.\n"
+            "• Planner — free forever."
+        ),
+        "save_balance_text": (
+            "💡 How to save your balance:\n"
+            "• Use the daily free quota: {chats} chats and {images} "
+            "image every day.\n"
+            "• Keep questions short and to the point.\n"
+            "• Turn on voice replies only when you need them.\n"
+            "• Keep tasks and plans in the planner — it is free."
+        ),
+        "spends_on": "✅ Charges are now shown",
+        "spends_off": "🔕 Charges will no longer be shown",
+        "spend_receipt": "💳 Charged {amount} RUB ({what}). Balance left: {total} RUB.",
+        "spend_chat": "chat",
+        "spend_image": "image",
+        "spend_tts": "voice reply",
+        "tts_locked": (
+            "🔇 Trial voice replies are used up. Voice replies will turn on "
+            "with a positive balance ({price} RUB/1000 characters)."
         ),
         "video_stub": "🎬 Video generation is coming very soon!",
-        "premium_menu": (
-            "💎 VoicePlan Subscription\n\n"
-            "⭐ Telegram Stars — 199 XTR / month\n"
-            "💳 Bank card (YooKassa) — coming soon\n\n"
-            "Includes:\n"
-            "• unlimited AI chat\n"
-            "• unlimited images\n"
-            "• tasks, calendar and reminders\n\n"
-            "Free attempts left: {free}."
-        ),
         "yookassa_stub": "💳 YooKassa payments are not connected yet. Coming soon!",
         "btn_planner": "📋 Tasks & calendar",
         "nav_folders": "📂 Folders",
@@ -422,6 +555,13 @@ def init_db():
                     timezone TEXT DEFAULT 'Europe/Moscow',
                     reminder_offsets TEXT DEFAULT '[]',
                     voice_replies INTEGER DEFAULT 0,
+                    balance_paid REAL DEFAULT 0,
+                    balance_bonus REAL DEFAULT 0,
+                    tts_free_left INTEGER DEFAULT 3,
+                    free_day TEXT DEFAULT '',
+                    daily_chat_left INTEGER DEFAULT 3,
+                    daily_image_left INTEGER DEFAULT 1,
+                    show_spends INTEGER DEFAULT 1,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -434,6 +574,15 @@ def init_db():
                 "voice_replies": "INTEGER DEFAULT 0",
                 "created_at": "TEXT",
                 "oferta_accepted": "INTEGER DEFAULT 0",
+                # Баланс ИИ: платная и бонусная часть, пробные озвучки,
+                # дневные бесплатные нормы и квитанции о списании.
+                "balance_paid": "REAL DEFAULT 0",
+                "balance_bonus": "REAL DEFAULT 0",
+                "tts_free_left": f"INTEGER DEFAULT {FREE_TTS_TRIES}",
+                "free_day": "TEXT DEFAULT ''",
+                "daily_chat_left": f"INTEGER DEFAULT {FREE_CHATS_PER_DAY}",
+                "daily_image_left": f"INTEGER DEFAULT {FREE_IMAGES_PER_DAY}",
+                "show_spends": "INTEGER DEFAULT 1",
             }
             for column, definition in migrations.items():
                 if column not in cols:
@@ -617,7 +766,7 @@ def oferta_gate(message):
 
 
 def consume_attempt(uid):
-    """Списать одну бесплатную попытку."""
+    """Списать одну бесплатную попытку (легаси: голосовые входы планера)."""
     with db_lock:
         conn = get_db()
         try:
@@ -628,6 +777,132 @@ def consume_attempt(uid):
             conn.commit()
         finally:
             conn.close()
+
+
+# ------------------------------------------------------------
+# БАЛАНС ИИ: дневные бесплатные нормы, платный/бонусный баланс.
+# ------------------------------------------------------------
+
+def ensure_daily(uid):
+    """Сброс дневных бесплатных норм раз в сутки (по поясу пользователя)."""
+    today = _now_in_user_tz(uid).date().isoformat()
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            row = conn.execute(
+                "SELECT free_day FROM users WHERE user_id = ?", (uid,)
+            ).fetchone()
+            if not row or (row["free_day"] or "") != today:
+                conn.execute(
+                    """UPDATE users SET free_day = ?, daily_chat_left = ?,
+                       daily_image_left = ? WHERE user_id = ?""",
+                    (today, FREE_CHATS_PER_DAY, FREE_IMAGES_PER_DAY, uid),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
+
+def get_balance(uid):
+    """(paid, bonus, tts_free, chat_left, image_left, show_spends) с суточным сбросом."""
+    ensure_daily(uid)
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                """SELECT balance_paid, balance_bonus, tts_free_left,
+                          daily_chat_left, daily_image_left, show_spends
+                   FROM users WHERE user_id = ?""",
+                (uid,),
+            ).fetchone()
+            if not row:
+                return (
+                    0.0, 0.0, FREE_TTS_TRIES,
+                    FREE_CHATS_PER_DAY, FREE_IMAGES_PER_DAY, 1,
+                )
+            return (
+                float(row["balance_paid"] or 0),
+                float(row["balance_bonus"] or 0),
+                int(row["tts_free_left"] or 0),
+                int(row["daily_chat_left"] or 0),
+                int(row["daily_image_left"] or 0),
+                int(row["show_spends"] if row["show_spends"] is not None else 1),
+            )
+        finally:
+            conn.close()
+
+
+def consume_daily(uid, kind):
+    """Списать одну дневную бесплатную норму: 'chat' или 'image'."""
+    column = "daily_chat_left" if kind == "chat" else "daily_image_left"
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                f"UPDATE users SET {column} = MAX({column} - 1, 0) WHERE user_id = ?",
+                (uid,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def consume_tts_trial(uid):
+    """Списать одну пробную озвучку (выдаётся один раз при подключении)."""
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "UPDATE users SET tts_free_left = MAX(tts_free_left - 1, 0) WHERE user_id = ?",
+                (uid,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def spend_from_balance(uid, amount):
+    """Списать amount ₽: сначала бонусный, затем платный. True — успех."""
+    amount = round(float(amount), 2)
+    if amount <= 0:
+        return True
+    paid, bonus, *_rest = get_balance(uid)
+    if round(paid + bonus, 2) + 1e-9 < amount:
+        return False
+    from_bonus = min(bonus, amount)
+    from_paid = amount - from_bonus
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "UPDATE users SET balance_bonus = ?, balance_paid = ? WHERE user_id = ?",
+                (round(bonus - from_bonus, 2), round(paid - from_paid, 2), uid),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return True
+
+
+def maybe_receipt(uid, amount, what_key):
+    """Квитанция о списании — если пользователь не выключил «Показывать списания»."""
+    paid, bonus, _tts, _chat, _img, show = get_balance(uid)
+    if not show:
+        return
+    try:
+        bot.send_message(
+            uid,
+            tr(
+                uid,
+                "spend_receipt",
+                amount=f"{amount:.2f}",
+                what=tr(uid, what_key),
+                total=f"{paid + bonus:.2f}",
+            ),
+        )
+    except Exception:
+        logger.exception("Не удалось отправить квитанцию о списании")
 
 
 def get_user_preferences(uid):
@@ -759,6 +1034,70 @@ def log_ai_request(uid, kind, prompt_tokens=0, completion_tokens=0, audio_second
 # 4. КЛАВИАТУРЫ И СТАРТОВОЕ МЕНЮ
 # ============================================================
 
+def balance_open_markup(uid):
+    """Кнопка «Посмотреть баланс» под сообщением об исчерпании лимитов."""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(tr(uid, "bal_open"), callback_data="bal:show")
+    )
+    return markup
+
+
+def balance_screen(uid):
+    """Экран «💰 Баланс»: таблица + кнопки (по образцу скриншота)."""
+    paid, bonus, tts_free, chat_left, image_left, show = get_balance(uid)
+    text = tr(
+        uid,
+        "balance_text",
+        total=f"{paid + bonus:.2f}",
+        paid=f"{paid:.2f}",
+        bonus=f"{bonus:.2f}",
+        chats=chat_left,
+        chats_max=FREE_CHATS_PER_DAY,
+        images=image_left,
+        images_max=FREE_IMAGES_PER_DAY,
+        tts_free=tts_free,
+        price_chat=f"{PRICE_CHAT_RUB:g}",
+        price_image=f"{PRICE_IMAGE_RUB:g}",
+        price_tts=f"{PRICE_TTS_RUB_PER_1K:g}",
+    )
+    spends_label = tr(uid, "bal_spends_on") if show else tr(uid, "bal_spends_off")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"),
+        types.InlineKeyboardButton(tr(uid, "bal_free_gift"), callback_data="bal:free"),
+        types.InlineKeyboardButton(tr(uid, "bal_how"), callback_data="bal:how"),
+        types.InlineKeyboardButton(tr(uid, "bal_save"), callback_data="bal:save"),
+        types.InlineKeyboardButton(spends_label, callback_data="bal:spends"),
+        types.InlineKeyboardButton(tr(uid, "bal_close"), callback_data="bal:close"),
+    )
+    return text, markup
+
+
+def topup_screen(uid):
+    """Экран «💰 Пополнить баланс»: пакеты 199/490/990 ₽ через Telegram Stars."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for rub, bonus_pct in TOPUP_PACKAGES:
+        bonus_rub = rub * bonus_pct // 100
+        # XTR считаем 1:1 к рублю (формат прежнего меню); курс Stars
+        # можно уточнить позже, изменив только этот цикл.
+        label = f"⭐ {rub} XTR — {rub} ₽"
+        if bonus_rub:
+            label += f" (+{bonus_rub} ₽ бонус)"
+        if rub == 490:
+            label += f" {tr(uid, 'popular')}"
+        markup.add(
+            types.InlineKeyboardButton(label, callback_data=f"bal:buy:{rub}")
+        )
+    markup.add(
+        types.InlineKeyboardButton(tr(uid, "bal_back"), callback_data="bal:show")
+    )
+    markup.add(
+        types.InlineKeyboardButton("💳 ЮKassa", callback_data="pay_yookassa")
+    )
+    return tr(uid, "topup_title"), markup
+
+
 def main_keyboard(uid):
     """Главное меню: ИИ-функции сверху, планер одной кнопкой, служебные снизу."""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -798,14 +1137,16 @@ def handle_start(message):
         send_oferta_prompt(message.chat.id, message.from_user.id)
         return
 
-    free, _premium = get_user_data(message.from_user.id)
+    _paid, _bonus, _tts, chats, images, _show = get_balance(message.from_user.id)
     bot.send_message(
         message.chat.id,
         tr(
             message.from_user.id,
             "welcome",
             name=message.from_user.first_name or "друг",
-            free=free,
+            chats=chats,
+            images=images,
+            total=f"{_paid + _bonus:.2f}",
         ),
         reply_markup=main_keyboard(message.from_user.id),
     )
@@ -819,13 +1160,13 @@ def handle_help(message):
             "Send a voice note or text with your plans. "
             "I’ll sort tasks and events. Use the menu to view tasks, events, folders, "
             "calendar, settings, or change language. "
-            "Commands: /calendar — events calendar, /free — free attempts balance."
+            "Commands: /calendar — events calendar, /balance — AI balance."
         )
     else:
         text = (
             "Отправьте голосовое или текст с планами. Я разделю задачи и события. "
             "Используйте меню, чтобы просматривать дела, события, папки, календарь и настройки. "
-            "Команды: /calendar — календарь событий, /free — остаток попыток."
+            "Команды: /calendar — календарь событий, /balance — баланс ИИ."
         )
     bot.send_message(message.chat.id, text, reply_markup=main_keyboard(uid))
 
@@ -1350,7 +1691,7 @@ def set_language(call):
             conn.close()
 
     bot.answer_callback_query(call.id, "✅")
-    free, _premium = get_user_data(uid)
+    _paid, _bonus, _tts, chats, images, _show = get_balance(uid)
     bot.send_message(
         call.message.chat.id,
         tr(uid, "language_saved"),
@@ -1358,7 +1699,14 @@ def set_language(call):
     )
     bot.send_message(
         call.message.chat.id,
-        tr(uid, "welcome", name=call.from_user.first_name or "friend", free=free),
+        tr(
+            uid,
+            "welcome",
+            name=call.from_user.first_name or "friend",
+            chats=chats,
+            images=images,
+            total=f"{_paid + _bonus:.2f}",
+        ),
     )
 
 
@@ -1390,6 +1738,17 @@ def toggle_voice_setting(call):
         finally:
             conn.close()
     bot.answer_callback_query(call.id, "✅")
+    # При включении озвучки без пробных попыток и баланса — предупреждение.
+    if value == 1:
+        paid, bonus, tts_free, _c, _i, _s = get_balance(uid)
+        if tts_free <= 0 and paid + bonus <= 0:
+            try:
+                bot.send_message(
+                    call.message.chat.id,
+                    tr(uid, "tts_locked", price=f"{PRICE_TTS_RUB_PER_1K:g}"),
+                )
+            except Exception:
+                logger.exception("Не удалось отправить подсказку об озвучке")
     text, markup = dashboard(uid)
     try:
         bot.edit_message_text(
@@ -1823,18 +2182,31 @@ def synthesize_speech(text, output_path):
 
 
 def send_answer(uid, text):
-    """Ответ пользователю: голосом, если включена озвучка, иначе текстом.
+    """Ответ пользователю: голосом, если озвучка доступна, иначе текстом.
 
-    Озвучка оплачивается с баланса ИИ (≈1.5 ₽/1000 знаков) и учитывается в /report.
+    Озвучка активна при положительном балансе либо за счёт пробных
+    озвучек (первые FREE_TTS_TRIES при подключении). Стоимость
+    ≈ PRICE_TTS_RUB_PER_1K ₽/1000 знаков, учитывается в /report.
     """
     _tz, _offsets, voice_enabled = get_user_preferences(uid)
 
-    if voice_enabled and TTS_API_URL and TTS_API_KEY:
+    paid, bonus, tts_free, _chat, _img, _show = get_balance(uid)
+    tts_cost = round(len(text[:3500]) / 1000 * PRICE_TTS_RUB_PER_1K, 3)
+    # Бесплатная пробная озвучка имеет приоритет над балансом.
+    use_trial = tts_free > 0
+    use_paid = not use_trial and (paid + bonus) >= tts_cost
+
+    if voice_enabled and TTS_API_URL and TTS_API_KEY and (use_trial or use_paid):
         path = os.path.join(tempfile.gettempdir(), f"voiceplan_tts_{uid}_{uuid.uuid4().hex}.ogg")
         try:
             if synthesize_speech(text, path):
                 with open(path, "rb") as audio:
                     bot.send_voice(uid, audio)
+                if use_trial:
+                    consume_tts_trial(uid)
+                else:
+                    spend_from_balance(uid, tts_cost)
+                    maybe_receipt(uid, tts_cost, "spend_tts")
                 log_ai_request(
                     uid,
                     "tts",
@@ -1976,14 +2348,33 @@ def handle_plain_text(message):
     # Режим «💬 Чат с ИИ»: обычный вопрос — ответ текстовой нейросети.
     if user_states.get(uid) == "chat":
         free, premium = get_user_data(uid)
-        if free <= 0 and not premium:
-            bot.reply_to(message, tr(uid, "tries_limit"))
+        paid, bonus, tts_free, chat_left, _img, _show = get_balance(uid)
+
+        # Порядок списания: дневная бесплатная норма → баланс → отказ.
+        # Легаси-Premium (старая подписка) ходит без списания.
+        spend_amount = 0.0
+        daily_free = True
+        if premium:
+            pass
+        elif chat_left > 0:
+            pass
+        elif paid + bonus >= PRICE_CHAT_RUB:
+            daily_free = False
+            spend_amount = PRICE_CHAT_RUB
+        else:
+            bot.reply_to(
+                message, tr(uid, "tries_limit"), reply_markup=balance_open_markup(uid)
+            )
             return
 
         status = bot.reply_to(message, tr(uid, "processing"))
         try:
             answer = ai_chat_reply(uid, text)
-            consume_attempt(uid)
+            if daily_free and not premium:
+                consume_daily(uid, "chat")
+            elif not daily_free:
+                spend_from_balance(uid, spend_amount)
+                maybe_receipt(uid, spend_amount, "spend_chat")
             try:
                 bot.delete_message(message.chat.id, status.message_id)
             except Exception:
@@ -2016,15 +2407,37 @@ def handle_plain_text(message):
     # Режим «🎨 Картинки»: текст — промпт для генерации изображения.
     if user_states.get(uid) == "image_prompt":
         free, premium = get_user_data(uid)
-        if free <= 0 and not premium:
-            bot.reply_to(message, tr(uid, "tries_limit"))
+        paid, bonus, tts_free, _chat, image_left, _show = get_balance(uid)
+
+        # Легаси-Premium (старая подписка) ходит без списания.
+        spend_amount = 0.0
+        daily_free = True
+        if premium:
+            pass
+        elif image_left > 0:
+            pass
+        elif paid + bonus >= PRICE_IMAGE_RUB:
+            daily_free = False
+            spend_amount = PRICE_IMAGE_RUB
+        else:
+            bot.reply_to(
+                message, tr(uid, "tries_limit"), reply_markup=balance_open_markup(uid)
+            )
             return
 
         status = bot.reply_to(message, tr(uid, "image_generating"))
         try:
             photo = generate_image(uid, text)
-            consume_attempt(uid)
-            free_after, _ = get_user_data(uid)
+            if premium:
+                caption = tr(uid, "image_done_paid")
+            elif daily_free:
+                consume_daily(uid, "image")
+                _p, _b, _t, _c, image_after, _s = get_balance(uid)
+                caption = tr(uid, "image_done", left=image_after)
+            else:
+                spend_from_balance(uid, spend_amount)
+                maybe_receipt(uid, spend_amount, "spend_image")
+                caption = tr(uid, "image_done_paid")
             try:
                 bot.delete_message(message.chat.id, status.message_id)
             except Exception:
@@ -2032,7 +2445,7 @@ def handle_plain_text(message):
             bot.send_photo(
                 message.chat.id,
                 photo,
-                caption=tr(uid, "image_done", free=free_after),
+                caption=caption,
             )
         except Exception:
             logger.exception("Image generation failed for user %s", uid)
@@ -2138,23 +2551,12 @@ def settings_command(message):
 
 
 @bot.message_handler(commands=["premium"])
+@bot.message_handler(commands=["balance"])
 def premium_command(message):
+    """Экран «💰 Баланс»: остаток, дневные нормы, пополнение, настройки."""
     uid = message.from_user.id
-    free, premium = get_user_data(uid)
-    markup = types.InlineKeyboardMarkup()
-    markup.row(
-        types.InlineKeyboardButton("⭐ Stars — 199 XTR", callback_data="buy_stars"),
-        types.InlineKeyboardButton("💳 ЮKassa", callback_data="pay_yookassa"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("📖 Оферта / Terms", callback_data="oferta:show")
-    )
-    status = "Premium" if premium else "Basic"
-    bot.send_message(
-        message.chat.id,
-        tr(uid, "premium_menu", free=free) + f"\nStatus: {status}",
-        reply_markup=markup,
-    )
+    text, markup = balance_screen(uid)
+    bot.send_message(message.chat.id, text, reply_markup=markup)
 
 
 @bot.message_handler(commands=["support"])
@@ -2323,8 +2725,9 @@ def free_self_command(message):
     parts = message.text.split()
 
     if len(parts) == 1:
-        free, _premium = get_user_data(uid)
-        bot.reply_to(message, tr(uid, "premium", free=free))
+        # /free — показываем экран баланса (остаток, дневные нормы, пополнение).
+        text, markup = balance_screen(uid)
+        bot.reply_to(message, text, reply_markup=markup)
         return
 
     if uid != ADMIN_ID:
@@ -2543,16 +2946,11 @@ def admin_stats_period(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "buy_stars")
 def buy_stars(call):
-    prices = [types.LabeledPrice(label="VoicePlan Premium — месяц", amount=199)]
-    bot.send_invoice(
-        chat_id=call.message.chat.id,
-        title="VoicePlan Premium",
-        description="Premium-доступ к голосовым функциям планера на один месяц.",
-        invoice_payload=f"premium_month:{call.from_user.id}",
-        provider_token="",
-        currency="XTR",
-        prices=prices,
-    )
+    """Старая кнопка «Stars» из прежнего меню → экран выбора пакета."""
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    text, markup = topup_screen(uid)
+    _edit_or_send(call, text, markup)
 
 
 @bot.pre_checkout_query_handler(func=lambda query: True)
@@ -2564,9 +2962,54 @@ def pre_checkout(query):
 def successful_payment(message):
     uid = message.from_user.id
     payment = message.successful_payment
+    payload = payment.invoice_payload or ""
 
-    # ВАЖНО: это упрощённый флаг Premium, не подписка с автоматическим сроком истечения.
-    # Срок действия нужно внедрить отдельно до коммерческого запуска.
+    # Новый формат: bal_topup:199 → зачисление на баланс + бонус пакета.
+    if payload.startswith("bal_topup:"):
+        try:
+            rub = int(payload.split(":", 1)[1])
+        except ValueError:
+            rub = int(payment.total_amount)
+        bonus_pct = next((pct for amount, pct in TOPUP_PACKAGES if amount == rub), 0)
+        bonus = round(rub * bonus_pct / 100.0, 2)
+        with db_lock:
+            conn = get_db()
+            try:
+                conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+                conn.execute(
+                    """UPDATE users SET balance_paid = balance_paid + ?,
+                       balance_bonus = balance_bonus + ? WHERE user_id = ?""",
+                    (float(rub), bonus, uid),
+                )
+                conn.execute(
+                    """INSERT INTO payments(user_id, amount_stars, amount_rub, payment_system)
+                       VALUES (?, ?, ?, 'Telegram Stars')""",
+                    (uid, payment.total_amount, float(rub)),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT balance_paid, balance_bonus FROM users WHERE user_id = ?",
+                    (uid,),
+                ).fetchone()
+            finally:
+                conn.close()
+        total = float(row["balance_paid"] or 0) + float(row["balance_bonus"] or 0)
+        bot.send_message(
+            uid,
+            tr(uid, "topup_done", amount=f"{rub:g}", bonus=f"{bonus:g}", total=f"{total:.2f}"),
+        )
+        if ADMIN_ID:
+            try:
+                bot.send_message(
+                    ADMIN_ID,
+                    f"💰 Оплата Stars: user_id={uid}, пакет={rub} ₽ "
+                    f"(бонус {bonus:g} ₽), звёзды={payment.total_amount}",
+                )
+            except Exception:
+                logger.exception("Не удалось уведомить администратора об оплате")
+        return
+
+    # Легаси-формат «premium_month»: сохраняем прежнее поведение подписки.
     with db_lock:
         conn = get_db()
         try:
@@ -2690,11 +3133,18 @@ def oferta_accept(call):
         pass
     bot.answer_callback_query(call.id, text="✅")
 
-    free, _premium = get_user_data(uid)
+    _paid, _bonus, _tts, chats, images, _show = get_balance(uid)
     bot.send_message(call.message.chat.id, tr(uid, "oferta_accepted_msg"))
     bot.send_message(
         call.message.chat.id,
-        tr(uid, "welcome", name=call.from_user.first_name or "друг", free=free),
+        tr(
+            uid,
+            "welcome",
+            name=call.from_user.first_name or "друг",
+            chats=chats,
+            images=images,
+            total=f"{_paid + _bonus:.2f}",
+        ),
         reply_markup=main_keyboard(uid),
     )
 
@@ -2726,6 +3176,137 @@ def pay_yookassa(call):
         text=tr(call.from_user.id, "yookassa_stub"),
         show_alert=True,
     )
+
+
+# ------------------------------------------------------------
+# CALLBACKS БАЛАНСА: показ, пополнение, справки, настройки.
+# ------------------------------------------------------------
+
+def _edit_or_send(call, text, markup):
+    try:
+        bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "bal:show")
+def bal_show(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    text, markup = balance_screen(uid)
+    _edit_or_send(call, text, markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "bal:topup")
+def bal_topup(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    text, markup = topup_screen(uid)
+    _edit_or_send(call, text, markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("bal:buy:"))
+def bal_buy(call):
+    """Инвойс Telegram Stars на пакет 199/490/990 ₽ (бонус начисляется после оплаты)."""
+    uid = call.from_user.id
+    try:
+        rub = int(call.data.split(":")[-1])
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid package")
+        return
+    package = next((p for p in TOPUP_PACKAGES if p[0] == rub), None)
+    if package is None:
+        bot.answer_callback_query(call.id, "Invalid package")
+        return
+    bot.answer_callback_query(call.id)
+    bot.send_invoice(
+        chat_id=call.message.chat.id,
+        title="VoicePlan — баланс",
+        description=f"Пополнение баланса на {rub} ₽ (пакет через Telegram Stars).",
+        invoice_payload=f"bal_topup:{rub}",
+        provider_token="",
+        currency="XTR",
+        prices=[types.LabeledPrice(label=f"Баланс {rub} ₽", amount=rub)],
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "bal:free")
+def bal_free(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        call.message.chat.id,
+        tr(
+            uid,
+            "free_gift_text",
+            chats=FREE_CHATS_PER_DAY,
+            images=FREE_IMAGES_PER_DAY,
+            tts=FREE_TTS_TRIES,
+        ),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "bal:how")
+def bal_how(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        call.message.chat.id,
+        tr(
+            uid,
+            "how_balance_text",
+            price_chat=f"{PRICE_CHAT_RUB:g}",
+            price_image=f"{PRICE_IMAGE_RUB:g}",
+            price_tts=f"{PRICE_TTS_RUB_PER_1K:g}",
+        ),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "bal:save")
+def bal_save(call):
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        call.message.chat.id,
+        tr(
+            uid,
+            "save_balance_text",
+            chats=FREE_CHATS_PER_DAY,
+            images=FREE_IMAGES_PER_DAY,
+        ),
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "bal:spends")
+def bal_spends(call):
+    uid = call.from_user.id
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT show_spends FROM users WHERE user_id = ?", (uid,)
+            ).fetchone()
+            value = 0 if (row and row["show_spends"]) else 1
+            conn.execute(
+                "UPDATE users SET show_spends = ? WHERE user_id = ?", (value, uid)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    bot.answer_callback_query(call.id, tr(uid, "spends_on" if value else "spends_off"))
+    text, markup = balance_screen(uid)
+    _edit_or_send(call, text, markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "bal:close")
+def bal_close(call):
+    bot.answer_callback_query(call.id, "✅")
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
 
 
 # ============================================================
