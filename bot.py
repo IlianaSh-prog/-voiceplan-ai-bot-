@@ -68,12 +68,14 @@ OFFER_URL = os.environ.get("OFFER_URL", "")
 # Сохраните старое имя базы, чтобы не потерять существующие данные.
 DB_PATH = os.environ.get("DB_PATH", "voiceplan_v4_3.db")
 
-# Необязательный TTS. Поддержка зависит от API-провайдера.
-# Если не настроено или endpoint не поддерживается, бот отправит текст.
-TTS_API_URL = os.environ.get("TTS_API_URL", "").strip()
-TTS_API_KEY = os.environ.get("TTS_API_KEY", "").strip()
+# Необязательный TTS (озвучка ответов). По умолчанию — тот же шлюз proxyapi,
+# что и чат с картинками: /audio/speech, OpenAI-compatible.
+# Стоимость ≈ $15/1M знаков ≈ 1.5 ₽ за 1000 знаков (типичный ответ 0.5–1 ₽).
+TTS_API_URL = os.environ.get("TTS_API_URL", "").strip() or f"{AI_BASE_URL}/audio/speech"
+TTS_API_KEY = os.environ.get("TTS_API_KEY", "").strip() or (AI_API_KEY or "")
 TTS_MODEL = os.environ.get("TTS_MODEL", "tts-1")
 TTS_VOICE = os.environ.get("TTS_VOICE", "alloy")
+TTS_PRICE_RUB_PER_1K = float(os.environ.get("TTS_PRICE_RUB_PER_1K", "1.5"))
 
 # Стоимость запросов для админ-отчёта (₽ за 1 млн токенов / за минуту Whisper).
 # Значения по умолчанию соответствуют gpt-4o-mini; можно переопределить в env.
@@ -223,6 +225,13 @@ LANGS = {
             "Бесплатных попыток осталось: {free}."
         ),
         "yookassa_stub": "💳 Оплата через ЮKassa пока не подключена. Совсем скоро!",
+        "btn_planner": "📋 Задачи и календарь",
+        "nav_folders": "📂 Папки",
+        "nav_calendar": "🗓 Календарь",
+        "nav_reminders": "⏰ Напоминания",
+        "nav_events": "📅 События",
+        "nav_newcat": "➕ Новая папка",
+        "nav_tasks": "⬅️ К задачам",
         "report_usage": "Формат отчёта:\n/report 01.10.2026 10:00 05.10.2026 23:59\nили без времени: /report 01.10 05.10",
     },
     "en": {
@@ -345,6 +354,13 @@ LANGS = {
             "Free attempts left: {free}."
         ),
         "yookassa_stub": "💳 YooKassa payments are not connected yet. Coming soon!",
+        "btn_planner": "📋 Tasks & calendar",
+        "nav_folders": "📂 Folders",
+        "nav_calendar": "🗓 Calendar",
+        "nav_reminders": "⏰ Reminders",
+        "nav_events": "📅 Events",
+        "nav_newcat": "➕ New folder",
+        "nav_tasks": "⬅️ To tasks",
         "report_usage": "Report format:\n/report 01.10.2026 10:00 05.10.2026 23:59\nor without time: /report 01.10 05.10",
     },
 }
@@ -744,7 +760,7 @@ def log_ai_request(uid, kind, prompt_tokens=0, completion_tokens=0, audio_second
 # ============================================================
 
 def main_keyboard(uid):
-    """Главное меню: сначала ИИ-функции (как у конкурентов), ниже — изюминка (планер)."""
+    """Главное меню: ИИ-функции сверху, планер одной кнопкой, служебные снизу."""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
         types.KeyboardButton(tr(uid, "btn_chat")),
@@ -754,22 +770,12 @@ def main_keyboard(uid):
         types.KeyboardButton(tr(uid, "btn_video")),
         types.KeyboardButton(tr(uid, "btn_premium")),
     )
-    markup.add(
-        types.KeyboardButton(tr(uid, "btn_tasks")),
-        types.KeyboardButton(tr(uid, "btn_calendar")),
-    )
-    markup.add(
-        types.KeyboardButton(tr(uid, "btn_folders")),
-        types.KeyboardButton(tr(uid, "btn_settings")),
-    )
+    markup.add(types.KeyboardButton(tr(uid, "btn_planner")))
     markup.add(
         types.KeyboardButton(tr(uid, "btn_support")),
         types.KeyboardButton(tr(uid, "btn_oferta")),
     )
-    markup.add(
-        types.KeyboardButton(tr(uid, "btn_language")),
-        types.KeyboardButton(tr(uid, "btn_events")),
-    )
+    markup.add(types.KeyboardButton(tr(uid, "btn_language")))
     return markup
 
 
@@ -828,6 +834,25 @@ def handle_help(message):
 # 5. ЗАДАЧИ, СОБЫТИЯ И ПАПКИ
 # ============================================================
 
+def _planner_nav(uid, markup):
+    """Навигация раздела «Задачи и календарь» (единая кнопка в главном меню)."""
+    _tz, _offsets, voice_on = get_user_preferences(uid)
+    voice_label = tr(uid, "voice_on") if voice_on else tr(uid, "voice_off")
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "nav_folders"), callback_data="planner:folders"),
+        types.InlineKeyboardButton(tr(uid, "nav_calendar"), callback_data="planner:calendar"),
+    )
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "nav_reminders"), callback_data="setting:reminders"),
+        types.InlineKeyboardButton(voice_label, callback_data="setting:voice"),
+    )
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "nav_events"), callback_data="planner:events"),
+        types.InlineKeyboardButton(tr(uid, "nav_newcat"), callback_data="planner:newcat"),
+    )
+    return markup
+
+
 def dashboard(uid):
     with db_lock:
         conn = get_db()
@@ -841,11 +866,12 @@ def dashboard(uid):
         finally:
             conn.close()
 
+    markup = types.InlineKeyboardMarkup(row_width=1)
     if not rows:
-        return tr(uid, "empty_tasks"), None
+        _planner_nav(uid, markup)
+        return tr(uid, "empty_tasks"), markup
 
     lines = [tr(uid, "dash_title")]
-    markup = types.InlineKeyboardMarkup(row_width=1)
     current_category = None
 
     for row in rows:
@@ -865,6 +891,7 @@ def dashboard(uid):
             )
         )
 
+    _planner_nav(uid, markup)
     return "\n".join(lines), markup
 
 
@@ -941,8 +968,8 @@ def show_events(message):
 @bot.message_handler(func=lambda m: bool(m.text) and m.text in {
     LANGS["ru"]["btn_folders"], LANGS["en"]["btn_folders"]
 })
-def show_folders(message):
-    uid = message.from_user.id
+def folders_view(uid):
+    """Список папок с задачами + кнопки навигации (общая для сообщения и callback)."""
     categories = get_user_categories(uid)
     lines = []
     found = False
@@ -975,9 +1002,8 @@ def show_folders(message):
 
     text = "\n".join(lines) if found else tr(uid, "folders_empty")
 
-    markup = None
+    markup = types.InlineKeyboardMarkup(row_width=2)
     if filled:
-        markup = types.InlineKeyboardMarkup(row_width=2)
         buttons = [
             types.InlineKeyboardButton(
                 f"📁 {category[:20]}", callback_data=f"folder:{index}"
@@ -986,7 +1012,14 @@ def show_folders(message):
         ]
         for i in range(0, len(buttons), 2):
             markup.row(*buttons[i:i + 2])
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:tasks")
+    )
+    return text, markup
 
+
+def show_folders(message):
+    text, markup = folders_view(message.from_user.id)
     bot.send_message(message.chat.id, text, reply_markup=markup)
 
 
@@ -1205,6 +1238,12 @@ def build_calendar(uid, year, month):
     if row_buttons:
         markup.row(*row_buttons)
 
+    # Интервалы напоминаний перенесены сюда из «Настроек» + возврат к задачам.
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "nav_reminders"), callback_data="setting:reminders"),
+        types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:tasks"),
+    )
+
     return "\n".join(lines), markup
 
 
@@ -1328,26 +1367,9 @@ def set_language(call):
     LANGS["ru"]["btn_settings"], LANGS["en"]["btn_settings"]
 })
 def settings_menu(message):
-    uid = message.from_user.id
-    tz_name, offsets, voice_on = get_user_preferences(uid)
-    lang = get_user_lang(uid)
-    labels = REMINDER_LABELS[lang]
-    reminder_value = ", ".join(labels.get(str(x), str(x)) for x in offsets) or "—"
-
-    text = (
-        tr(uid, "settings")
-        + "\n\n"
-        + tr(uid, "timezone", value=tz_name)
-        + "\n"
-        + tr(uid, "reminders", value=reminder_value)
-    )
-
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    voice_label = tr(uid, "voice_on") if voice_on else tr(uid, "voice_off")
-    markup.add(types.InlineKeyboardButton(voice_label, callback_data="setting:voice"))
-    markup.add(types.InlineKeyboardButton("⏰ Reminder intervals", callback_data="setting:reminders"))
-    markup.add(types.InlineKeyboardButton("🌍 Time zone", callback_data="setting:timezone"))
-    bot.send_message(message.chat.id, text, reply_markup=markup)
+    # Раздел «Настройки» убран из главного меню: интервалы напоминаний и озвучка
+    # теперь в разделе «Задачи и календарь». Старые клавиатуры ведут сюда же.
+    show_tasks(message)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "setting:voice")
@@ -1368,7 +1390,13 @@ def toggle_voice_setting(call):
         finally:
             conn.close()
     bot.answer_callback_query(call.id, "✅")
-    settings_menu(call.message)
+    text, markup = dashboard(uid)
+    try:
+        bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "setting:reminders")
@@ -1386,12 +1414,18 @@ def reminder_settings_menu(call):
                 callback_data=f"reminder_toggle:{key}",
             )
         )
-    bot.answer_callback_query(call.id)
-    bot.send_message(
-        call.message.chat.id,
-        tr(uid, "choose_reminders"),
-        reply_markup=markup,
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "nav_calendar"), callback_data="planner:calendar"),
+        types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:tasks"),
     )
+    bot.answer_callback_query(call.id)
+    text = tr(uid, "choose_reminders")
+    try:
+        bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("reminder_toggle:"))
@@ -1424,11 +1458,53 @@ def toggle_reminder_preference(call):
     reminder_settings_menu(call)
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "setting:timezone")
-def ask_timezone(call):
-    user_states[call.from_user.id] = "timezone"
-    bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, tr(call.from_user.id, "choose_timezone"))
+# ============================================================
+# 6-bis. РАЗДЕЛ «ЗАДАЧИ И КАЛЕНДАРЬ»: CALLBACK-НАВИГАЦИЯ
+# ============================================================
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("planner:"))
+def planner_router(call):
+    """Единый раздел: задачи, папки, календарь, события, новая папка."""
+    uid = call.from_user.id
+    action = call.data.split(":", 1)[1]
+
+    def edit_or_send(text, markup):
+        try:
+            bot.edit_message_text(
+                text,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup,
+            )
+        except Exception:
+            bot.send_message(call.message.chat.id, text, reply_markup=markup)
+
+    back_markup = types.InlineKeyboardMarkup()
+    back_markup.add(
+        types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:tasks")
+    )
+
+    if action == "tasks":
+        bot.answer_callback_query(call.id)
+        text, markup = dashboard(uid)
+        edit_or_send(text, markup)
+    elif action == "calendar":
+        now = _now_in_user_tz(uid)
+        _send_or_edit_calendar(call, uid, now.year, now.month)
+    elif action == "events":
+        bot.answer_callback_query(call.id)
+        text, markup = upcoming_events_text(uid)
+        edit_or_send(text, markup or back_markup)
+    elif action == "folders":
+        bot.answer_callback_query(call.id)
+        text, markup = folders_view(uid)
+        edit_or_send(text, markup)
+    elif action == "newcat":
+        bot.answer_callback_query(call.id)
+        user_states[uid] = "category"
+        bot.send_message(call.message.chat.id, tr(uid, "category_prompt"))
+    else:
+        bot.answer_callback_query(call.id)
 
 
 # ============================================================
@@ -1731,7 +1807,8 @@ def synthesize_speech(text, output_path):
             "model": TTS_MODEL,
             "voice": TTS_VOICE,
             "input": text[:3500],
-            "response_format": "ogg",
+            # opus = OGG/Opus — родной формат голосовых сообщений Telegram.
+            "response_format": "opus",
         },
         timeout=(15, 90),
     )
@@ -1746,6 +1823,10 @@ def synthesize_speech(text, output_path):
 
 
 def send_answer(uid, text):
+    """Ответ пользователю: голосом, если включена озвучка, иначе текстом.
+
+    Озвучка оплачивается с баланса ИИ (≈1.5 ₽/1000 знаков) и учитывается в /report.
+    """
     _tz, _offsets, voice_enabled = get_user_preferences(uid)
 
     if voice_enabled and TTS_API_URL and TTS_API_KEY:
@@ -1754,6 +1835,11 @@ def send_answer(uid, text):
             if synthesize_speech(text, path):
                 with open(path, "rb") as audio:
                     bot.send_voice(uid, audio)
+                log_ai_request(
+                    uid,
+                    "tts",
+                    cost_rub=round(len(text[:3500]) / 1000 * TTS_PRICE_RUB_PER_1K, 3),
+                )
                 return
         except Exception:
             logger.exception("TTS generation failed")
@@ -1761,7 +1847,9 @@ def send_answer(uid, text):
             if os.path.exists(path):
                 os.remove(path)
 
-    bot.send_message(uid, text)
+    # Фолбэк: текст, разбитый по лимиту Telegram (4096 символов).
+    for start in range(0, len(text), 4000):
+        bot.send_message(uid, text[start:start + 4000])
 
 
 # ============================================================
@@ -1907,14 +1995,19 @@ def handle_plain_text(message):
                     tr(uid, "btn_exit_chat"), callback_data="chat:exit"
                 )
             )
-            # Сообщение Telegram не длиннее 4096 символов — режем на части.
-            for start in range(0, len(answer), 4000):
-                chunk = answer[start:start + 4000]
-                bot.send_message(
-                    message.chat.id,
-                    chunk,
-                    reply_markup=markup if start + 4000 >= len(answer) else None,
-                )
+            # Озвучка ответов: голосом при включённой настройке, иначе текстом.
+            _tzo, _ofz, voice_on = get_user_preferences(uid)
+            if voice_on:
+                send_answer(uid, answer)
+            else:
+                # Сообщение Telegram не длиннее 4096 символов — режем на части.
+                for start in range(0, len(answer), 4000):
+                    chunk = answer[start:start + 4000]
+                    bot.send_message(
+                        message.chat.id,
+                        chunk,
+                        reply_markup=markup if start + 4000 >= len(answer) else None,
+                    )
         except Exception:
             logger.exception("AI chat failed for user %s", uid)
             bot.send_message(message.chat.id, tr(uid, "api_error"))
@@ -2122,6 +2215,8 @@ def text_router(message):
         if text in {LANGS["ru"]["btn_oferta"], LANGS["en"]["btn_oferta"]}:
             send_oferta_prompt(message.chat.id, uid)
             return
+        if text in {LANGS["ru"]["btn_planner"], LANGS["en"]["btn_planner"]}:
+            return show_tasks(message)
         if text in {LANGS["ru"]["btn_tasks"], LANGS["en"]["btn_tasks"]}:
             return show_tasks(message)
         if text in {LANGS["ru"]["btn_events"], LANGS["en"]["btn_events"]}:
