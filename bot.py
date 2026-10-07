@@ -226,7 +226,7 @@ LANGS = {
         "image_done": "🎨 Готово! Бесплатных картинок сегодня осталось: {left}.",
         "image_done_paid": "🎨 Готово!",
         "tries_limit": (
-            "⛔ Бесплатные попытки на сегодня закончились, а баланс пуст.\n"
+            "⛔ Бесплатные попытки на сегодня закончились.\n"
             "Проверьте баланс — кнопка ниже. "
             "Бесплатные возможности обновляются 1 раз в день."
         ),
@@ -271,10 +271,6 @@ LANGS = {
         ),
         "how_balance_text": (
             "ℹ️ Как работает баланс:\n"
-            "• Чат — {price_chat} ₽, картинка — {price_image} ₽, "
-            "озвучка — {price_tts} ₽/1000 знаков.\n"
-            "• Сначала тратится бесплатная дневная норма, затем бонусный "
-            "баланс, затем платный.\n"
             "• Бесплатные возможности обновляются 1 раз в день.\n"
             "• Планировщик — бесплатно навсегда."
         ),
@@ -415,7 +411,7 @@ LANGS = {
         "image_done": "🎨 Done! Free images left today: {left}.",
         "image_done_paid": "🎨 Done!",
         "tries_limit": (
-            "⛔ Free attempts for today are used up and the balance is empty.\n"
+            "⛔ Free attempts for today are used up.\n"
             "Check your balance — the button below. "
             "Free features refresh once a day."
         ),
@@ -460,10 +456,6 @@ LANGS = {
         ),
         "how_balance_text": (
             "ℹ️ How the balance works:\n"
-            "• Chat — {price_chat} RUB, image — {price_image} RUB, "
-            "voice — {price_tts} RUB/1000 characters.\n"
-            "• The free daily quota is used first, then the bonus "
-            "balance, then the paid balance.\n"
             "• Free features refresh once a day.\n"
             "• Planner — free forever."
         ),
@@ -3254,13 +3246,7 @@ def bal_how(call):
     bot.answer_callback_query(call.id)
     bot.send_message(
         call.message.chat.id,
-        tr(
-            uid,
-            "how_balance_text",
-            price_chat=f"{PRICE_CHAT_RUB:g}",
-            price_image=f"{PRICE_IMAGE_RUB:g}",
-            price_tts=f"{PRICE_TTS_RUB_PER_1K:g}",
-        ),
+        tr(uid, "how_balance_text"),
     )
 
 
