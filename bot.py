@@ -3,6 +3,7 @@ import sys
 import json
 import time
 import base64
+import tempfile
 import uuid
 import calendar as calmod
 import sqlite3
@@ -1748,7 +1749,7 @@ def send_answer(uid, text):
     _tz, _offsets, voice_enabled = get_user_preferences(uid)
 
     if voice_enabled and TTS_API_URL and TTS_API_KEY:
-        path = f"/tmp/voiceplan_tts_{uid}_{uuid.uuid4().hex}.ogg"
+        path = os.path.join(tempfile.gettempdir(), f"voiceplan_tts_{uid}_{uuid.uuid4().hex}.ogg")
         try:
             if synthesize_speech(text, path):
                 with open(path, "rb") as audio:
@@ -1780,7 +1781,7 @@ def handle_voice(message):
         return
 
     status = bot.reply_to(message, tr(uid, "processing"))
-    path = f"/tmp/voiceplan_{uid}_{message.message_id}.ogg"
+    path = os.path.join(tempfile.gettempdir(), f"voiceplan_{uid}_{message.message_id}.ogg")
 
     try:
         file_info = bot.get_file(message.voice.file_id)
