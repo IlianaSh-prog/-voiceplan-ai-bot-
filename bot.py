@@ -2165,6 +2165,30 @@ def support_command(message):
     )
 
 
+@bot.message_handler(commands=["chat"])
+def chat_command(message):
+    """Быстрый вход в режим ИИ-чата из команды."""
+    uid = message.from_user.id
+    if not oferta_gate(message):
+        return
+    user_states[uid] = "chat"
+    bot.send_message(
+        message.chat.id, tr(uid, "chat_started"), reply_markup=main_keyboard(uid)
+    )
+
+
+@bot.message_handler(commands=["image"])
+def image_command(message):
+    """Быстрый вход в режим генерации картинок из команды."""
+    uid = message.from_user.id
+    if not oferta_gate(message):
+        return
+    user_states[uid] = "image_prompt"
+    bot.send_message(
+        message.chat.id, tr(uid, "image_started"), reply_markup=main_keyboard(uid)
+    )
+
+
 @bot.message_handler(
     func=lambda message: bool(message.text)
     and not message.text.startswith("/")
