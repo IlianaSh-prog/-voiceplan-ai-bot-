@@ -146,6 +146,8 @@ LANGS = {
         "voice_on": "🔊 Озвучка ответов: включена",
         "voice_off": "🔇 Озвучка ответов: выключена",
         "reminders": "⏰ Напоминания: {value}",
+        "reminders_none": "не выбраны",
+        "cal_day_reminders": "   ⏰ напомню: {value}",
         "timezone": "🌍 Часовой пояс: {value}",
         "choose_timezone": (
             "Введите часовой пояс из базы IANA, например:\n"
@@ -332,6 +334,8 @@ LANGS = {
         "voice_on": "🔊 Spoken replies: on",
         "voice_off": "🔇 Spoken replies: off",
         "reminders": "⏰ Reminders: {value}",
+        "reminders_none": "none selected",
+        "cal_day_reminders": "   ⏰ reminders: {value}",
         "timezone": "🌍 Time zone: {value}",
         "choose_timezone": (
             "Enter an IANA time zone, for example:\n"
@@ -491,14 +495,24 @@ LANGS = {
 }
 
 REMINDER_CHOICES = {
-    "10": 10,
+    "15": 15,
     "60": 60,
     "1440": 1440,
 }
 
 REMINDER_LABELS = {
-    "ru": {"10": "10 минут", "60": "1 час", "1440": "1 день"},
-    "en": {"10": "10 minutes", "60": "1 hour", "1440": "1 day"},
+    "ru": {
+        "10": "за 10 минут",  # легаси-значение до миграции на 15 минут
+        "15": "за 15 минут",
+        "60": "за 1 час",
+        "1440": "за 1 день",
+    },
+    "en": {
+        "10": "10 minutes before",
+        "15": "15 minutes before",
+        "60": "1 hour before",
+        "1440": "1 day before",
+    },
 }
 
 SUPPORT_CONTACT = os.environ.get("SUPPORT_CONTACT", "@your_support_username")
@@ -685,9 +699,65 @@ def init_db():
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ai_requests_ts ON ai_requests(created_at)"
             )
+            migrate_reminder_10_to_15(conn)
             conn.commit()
         finally:
             conn.close()
+
+
+def migrate_reminder_10_to_15(conn):
+    """Идемпотентная миграция: интервал «за 10 минут» заменён на «за 15 минут».
+
+    Меняет настройки пользователей, сохранённые события и ещё не отправленные
+    срабатывания (если новое время срабатывания ещё не прошло).
+    """
+    def convert(raw):
+        try:
+            values = json.loads(raw or "[]")
+        except json.JSONDecodeError:
+            return None
+        if not any(str(x) == "10" for x in values):
+            return None
+        result = []
+        for x in values:
+            item = 15 if str(x) == "10" else int(x)
+            if item not in result:
+                result.append(item)
+        result.sort(reverse=True)
+        return json.dumps(result)
+
+    for row in conn.execute("SELECT user_id, reminder_offsets FROM users").fetchall():
+        new_value = convert(row["reminder_offsets"])
+        if new_value is not None:
+            conn.execute(
+                "UPDATE users SET reminder_offsets=? WHERE user_id=?",
+                (new_value, row["user_id"]),
+            )
+
+    now = datetime.now(timezone.utc)
+    for row in conn.execute("SELECT event_id, start_utc, reminders_json FROM events").fetchall():
+        new_value = convert(row["reminders_json"])
+        if new_value is None:
+            continue
+        conn.execute(
+            "UPDATE events SET reminders_json=? WHERE event_id=?",
+            (new_value, row["event_id"]),
+        )
+        try:
+            start = datetime.fromisoformat(row["start_utc"])
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        old_due = (start - timedelta(minutes=10)).isoformat(timespec="seconds")
+        new_due_dt = start - timedelta(minutes=15)
+        if new_due_dt <= now:
+            continue
+        conn.execute(
+            "UPDATE OR IGNORE reminders SET due_utc=? "
+            "WHERE event_id=? AND sent=0 AND due_utc=?",
+            (new_due_dt.isoformat(timespec="seconds"), row["event_id"], old_due),
+        )
 
 
 init_db()
@@ -1273,8 +1343,7 @@ def upcoming_events_text(uid):
         except json.JSONDecodeError:
             offsets = []
 
-        labels = REMINDER_LABELS[user_lang]
-        reminder_text = ", ".join(labels.get(str(x), str(x)) for x in offsets) or "—"
+        reminder_text = format_reminder_labels(uid, offsets)
         lines.append(
             tr(uid, "event_card", title=row["title"], date=date_text, reminders=reminder_text)
         )
@@ -1489,14 +1558,28 @@ MONTHS = {
 WEEKDAYS_HEADER = {"ru": "Пн Вт Ср Чт Пт Сб Вс", "en": "Mo Tu We Th Fr Sa Su"}
 
 
+def format_reminder_labels(uid, offsets):
+    """Список интервалов в виде «за 15 минут, за 1 час, за 1 день» (по возрастанию)."""
+    labels = REMINDER_LABELS[get_user_lang(uid)]
+    values = []
+    for x in offsets:
+        try:
+            values.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    values = sorted(set(values))
+    text = ", ".join(labels.get(str(v), str(v)) for v in values)
+    return text or tr(uid, "reminders_none")
+
+
 def _events_by_local_date(uid):
-    """Словарь {локальная дата: [(название, 'HH:MM'), ...]} по времени события."""
+    """Словарь {локальная дата: [(название, 'HH:MM', [datetime срабатываний]), ...]}."""
     user_tz_name, _off, _voice = get_user_preferences(uid)
     with db_lock:
         conn = get_db()
         try:
             rows = conn.execute(
-                "SELECT title, start_utc, timezone FROM events "
+                "SELECT title, start_utc, timezone, reminders_json FROM events "
                 "WHERE user_id = ? AND cancelled = 0",
                 (uid,),
             ).fetchall()
@@ -1510,10 +1593,17 @@ def _events_by_local_date(uid):
             local = datetime.fromisoformat(row["start_utc"]).astimezone(tz)
         except (ValueError, ZoneInfoNotFoundError):
             continue
-        result.setdefault(local.date(), []).append((row["title"], local.strftime("%H:%M")))
+        try:
+            offsets = sorted({int(x) for x in json.loads(row["reminders_json"] or "[]")})
+        except (ValueError, TypeError, json.JSONDecodeError):
+            offsets = []
+        fire_times = [local - timedelta(minutes=m) for m in offsets]
+        result.setdefault(local.date(), []).append(
+            (row["title"], local.strftime("%H:%M"), fire_times)
+        )
 
     for items in result.values():
-        items.sort(key=lambda pair: pair[1])
+        items.sort(key=lambda item: item[1])
     return result
 
 
@@ -1551,6 +1641,11 @@ def build_calendar(uid, year, month):
         lines.append(", ".join(str(d.day) for d in days_with))
     else:
         lines.append(tr(uid, "cal_no_dates"))
+
+    # Строка с выбранными интервалами напоминаний (все выбранные видны сразу).
+    _tz, selected_offsets, _voice = get_user_preferences(uid)
+    lines.append("")
+    lines.append(tr(uid, "reminders", value=format_reminder_labels(uid, selected_offsets)))
 
     markup = types.InlineKeyboardMarkup(row_width=7)
     prev_y, prev_m = (year - 1, 12) if month == 1 else (year, month - 1)
@@ -1637,7 +1732,11 @@ def calendar_open_day(call):
     items = _events_by_local_date(uid).get(day, [])
     if items:
         lines = [tr(uid, "cal_day_title", date=day.strftime("%d.%m.%Y"))]
-        lines.extend(f"• {title} — {time_hhmm}" for title, time_hhmm in items)
+        for title, time_hhmm, fire_times in items:
+            lines.append(f"• {title} — {time_hhmm}")
+            if fire_times:
+                stamps = ", ".join(t.strftime("%d.%m %H:%M") for t in fire_times)
+                lines.append(tr(uid, "cal_day_reminders", value=stamps))
     else:
         lines = [tr(uid, "cal_day_empty")]
 
@@ -1757,7 +1856,7 @@ def reminder_settings_menu(call):
     selected = {str(x) for x in selected}
     markup = types.InlineKeyboardMarkup(row_width=1)
     labels = REMINDER_LABELS[get_user_lang(uid)]
-    for key in ("10", "60", "1440"):
+    for key in ("15", "60", "1440"):
         marker = "✅ " if key in selected else ""
         markup.add(
             types.InlineKeyboardButton(
@@ -1770,7 +1869,9 @@ def reminder_settings_menu(call):
         types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:tasks"),
     )
     bot.answer_callback_query(call.id)
-    text = tr(uid, "choose_reminders")
+    text = tr(uid, "choose_reminders") + "\n\n" + tr(
+        uid, "reminders", value=format_reminder_labels(uid, selected)
+    )
     try:
         bot.edit_message_text(
             text, call.message.chat.id, call.message.message_id, reply_markup=markup
