@@ -160,6 +160,13 @@ LANGS = {
         "api_error": "⚠️ Не удалось обработать запрос. Попробуйте ещё раз чуть позже.",
         "no_speech": "Не удалось распознать речь. Попробуйте записать сообщение ещё раз.",
         "task_added": "✅ Задачи и события обновлены.",
+        "remind_pick": "📌 «{title}» сохранено. Выберите время напоминания:",
+        "remind_custom_btn": "✍️ Своё время",
+        "remind_skip": "🚫 Без напоминания",
+        "remind_custom_prompt": "✍️ Введите время напоминания, например: «за 30 минут», «за 2 часа» или «за 1 день».",
+        "remind_custom_bad": "Не удалось распознать время. Примеры: «за 30 минут», «за 2 часа», «за 1 день».",
+        "remind_done": "✅ Напоминание установлено: {value}.",
+        "remind_skipped": "🚫 Напоминание не установлено.",
         "reminder": "⏰ Скоро событие: {title}\n🕒 {date}",
         "reminder_options": "Напоминания: {value}",
         "event_card": (
@@ -348,6 +355,13 @@ LANGS = {
         "api_error": "⚠️ I couldn’t process that request. Please try again shortly.",
         "no_speech": "I couldn’t recognize the speech. Please record another message.",
         "task_added": "✅ Tasks and events updated.",
+        "remind_pick": "📌 “{title}” saved. Choose a reminder time:",
+        "remind_custom_btn": "✍️ Custom time",
+        "remind_skip": "🚫 No reminder",
+        "remind_custom_prompt": "✍️ Enter a reminder time, e.g. “30 minutes before”, “2 hours before” or “1 day before”.",
+        "remind_custom_bad": "Couldn’t recognize the time. Examples: “30 minutes before”, “2 hours before”, “1 day before”.",
+        "remind_done": "✅ Reminder set: {value}.",
+        "remind_skipped": "🚫 No reminder set.",
         "reminder": "⏰ Upcoming event: {title}\n🕒 {date}",
         "reminder_options": "Reminders: {value}",
         "event_card": (
@@ -496,20 +510,32 @@ LANGS = {
 
 REMINDER_CHOICES = {
     "15": 15,
+    "30": 30,
     "60": 60,
-    "1440": 1440,
+    "1440": 1440,  # остаётся валидным для уже сохранённых событий и снятия
+}
+
+# Быстрые кнопки напоминаний (бесплатный выбор): 15 минут, 30 минут, 1 час.
+REMINDER_QUICK = ("15", "30", "60")
+
+# Короткие подписи для кнопок под сообщением «выберите время напоминания».
+REMINDER_SHORT = {
+    "ru": {"15": "15 минут", "30": "30 минут", "60": "1 час"},
+    "en": {"15": "15 min", "30": "30 min", "60": "1 hour"},
 }
 
 REMINDER_LABELS = {
     "ru": {
         "10": "за 10 минут",  # легаси-значение до миграции на 15 минут
         "15": "за 15 минут",
+        "30": "за 30 минут",
         "60": "за 1 час",
         "1440": "за 1 день",
     },
     "en": {
         "10": "10 minutes before",
         "15": "15 minutes before",
+        "30": "30 minutes before",
         "60": "1 hour before",
         "1440": "1 day before",
     },
@@ -945,6 +971,12 @@ def spend_from_balance(uid, amount):
         finally:
             conn.close()
     return True
+
+
+def has_paid_balance(uid):
+    """Есть ли у пользователя положительный баланс (платный или бонусный)."""
+    paid, bonus, *_rest = get_balance(uid)
+    return round(float(paid) + float(bonus), 2) > 0
 
 
 def maybe_receipt(uid, amount, what_key):
@@ -1568,8 +1600,79 @@ def format_reminder_labels(uid, offsets):
         except (TypeError, ValueError):
             continue
     values = sorted(set(values))
-    text = ", ".join(labels.get(str(v), str(v)) for v in values)
+    text = ", ".join(labels.get(str(v), f"{v} мин") for v in values)
     return text or tr(uid, "reminders_none")
+
+
+def parse_custom_reminder(text):
+    """Разбор произвольного времени напоминания из текста → минуты (int) или None.
+
+    Примеры: «30 мин», «45 минут», «2 часа», «1 день», «90 м», «полтора часа».
+    Допустимый диапазон: 1 минута … 7 суток (10080 мин).
+    """
+    import re
+
+    raw = (text or "").strip().lower().replace("ё", "е")
+    if not raw:
+        return None
+
+    # Особый случай: «полтора часа» = 90 минут.
+    if "полтора" in raw and "час" in raw:
+        return 90
+
+    match = re.search(r"(\d+)\s*(мин|м|хв|минут|hour|hours|час|ч|day|days|день|дней|д|сутки|суток)", raw)
+    if not match:
+        return None
+
+    value = int(match.group(1))
+    unit = match.group(2)
+
+    if unit in ("час", "ч", "hour", "hours"):
+        minutes = value * 60
+    elif unit in ("день", "дней", "д", "day", "days", "сутки", "суток"):
+        minutes = value * 1440
+    else:  # минуты
+        minutes = value
+
+    if 1 <= minutes <= 7 * 1440:
+        return minutes
+    return None
+
+
+def set_event_reminder(uid, event_id, minutes):
+    """Установить одно напоминание к событию (перезаписывает reminders_json)."""
+    minutes = int(minutes)
+    now = datetime.now(timezone.utc)
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT start_utc, cancelled FROM events WHERE event_id=? AND user_id=?",
+                (event_id, uid),
+            ).fetchone()
+            if not row or row["cancelled"]:
+                return None
+            start = datetime.fromisoformat(row["start_utc"])
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=timezone.utc)
+            due = start - timedelta(minutes=minutes)
+            # Напоминание не позже самого события.
+            if due < now:
+                due = now
+            due_text = due.isoformat(timespec="seconds")
+            conn.execute(
+                "UPDATE events SET reminders_json=? WHERE event_id=? AND user_id=?",
+                (json.dumps([minutes]), event_id, uid),
+            )
+            conn.execute("DELETE FROM reminders WHERE event_id=?", (event_id,))
+            conn.execute(
+                "INSERT OR IGNORE INTO reminders (event_id, user_id, due_utc, sent) VALUES (?, ?, ?, 0)",
+                (event_id, uid, due_text),
+            )
+            conn.commit()
+            return minutes
+        finally:
+            conn.close()
 
 
 def _events_by_local_date(uid):
@@ -1856,7 +1959,7 @@ def reminder_settings_menu(call):
     selected = {str(x) for x in selected}
     markup = types.InlineKeyboardMarkup(row_width=1)
     labels = REMINDER_LABELS[get_user_lang(uid)]
-    for key in ("15", "60", "1440"):
+    for key in REMINDER_QUICK:
         marker = "✅ " if key in selected else ""
         markup.add(
             types.InlineKeyboardButton(
@@ -1908,6 +2011,60 @@ def toggle_reminder_preference(call):
 
     bot.answer_callback_query(call.id, "✅")
     reminder_settings_menu(call)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("evtrem:"))
+def event_reminder_set(call):
+    """Кнопка быстрого выбора времени напоминания для конкретного события."""
+    uid = call.from_user.id
+    try:
+        _, event_id, value = call.data.split(":", 2)
+        minutes = int(value)
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+    if minutes not in REMINDER_CHOICES.values() and not (1 <= minutes <= 7 * 1440):
+        bot.answer_callback_query(call.id, "Invalid interval")
+        return
+    result = set_event_reminder(uid, int(event_id), minutes)
+    if not result:
+        bot.answer_callback_query(call.id, "Event not found")
+        return
+    try:
+        bot.edit_message_text(
+            tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes])),
+            call.message.chat.id,
+            call.message.message_id,
+        )
+    except Exception:
+        bot.send_message(
+            call.message.chat.id,
+            tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes])),
+        )
+    bot.answer_callback_query(call.id, "✅")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("evtremc:"))
+def event_reminder_custom(call):
+    """Кнопка «Своё время» — просим ввести время напоминания текстом."""
+    uid = call.from_user.id
+    event_id = call.data.split(":", 1)[1]
+    user_states[uid] = f"custom_reminder:{event_id}"
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, tr(uid, "remind_custom_prompt"))
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("evtrems:"))
+def event_reminder_skip(call):
+    """Кнопка «Без напоминания»."""
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id, "✅")
+    try:
+        bot.edit_message_text(
+            tr(uid, "remind_skipped"), call.message.chat.id, call.message.message_id
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, tr(uid, "remind_skipped"))
 
 
 # ============================================================
@@ -2054,6 +2211,10 @@ Extract:
 2. new_tasks: short actionable items with exact category and text.
 3. new_events: events with title, local_datetime in ISO format YYYY-MM-DDTHH:MM,
    or null if the date/time is unclear.
+4. For each event, if the user explicitly asks to be reminded BEFORE it
+   (e.g. "remind me 30 minutes before", "remind me 2 hours before",
+   "remind me a day before"), set remind_minutes to that number of minutes
+   (30, 120, 1440, ...). If no reminder time is stated, set remind_minutes to null.
 
 If date is relative (e.g. tomorrow), resolve it using the current date:
 {datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")}.
@@ -2062,7 +2223,7 @@ JSON schema:
 {{
   "completed_task_ids": [],
   "new_tasks": [{{"category": "exact category", "text": "task"}}],
-  "new_events": [{{"title": "event", "local_datetime": "2026-05-18T15:30"}}]
+  "new_events": [{{"title": "event", "local_datetime": "2026-05-18T15:30", "remind_minutes": null}}]
 }}
 """
 
@@ -2168,11 +2329,14 @@ def create_event(uid, title, local_datetime, timezone_name, reminders):
 
 def save_ai_result(uid, data, use_voice_limit=False):
     free, premium = get_user_data(uid)
+    _paid, _bonus, _tts, _chat, _image, _show = get_balance(uid)
+    has_paid_balance = (_paid + _bonus) > 0
     inserted_tasks = 0
     inserted_events = 0
     completed = 0
+    no_reminder_events = []  # [(event_id, title)] — созданы без напоминания
 
-    timezone_name, default_reminders, _voice = get_user_preferences(uid)
+    timezone_name, _default_reminders, _voice = get_user_preferences(uid)
 
     with db_lock:
         conn = get_db()
@@ -2206,7 +2370,9 @@ def save_ai_result(uid, data, use_voice_limit=False):
         finally:
             conn.close()
 
-    # События сохраняем отдельно, используя часовой пояс и интервалы пользователя.
+    # События сохраняем отдельно. По умолчанию — БЕЗ напоминания:
+    # произвольное время берём из голоса/текста только при положительном балансе,
+    # иначе предлагаем выбрать время кнопками после фиксации задачи.
     for item in data.get("new_events", []):
         if not isinstance(item, dict):
             continue
@@ -2214,15 +2380,27 @@ def save_ai_result(uid, data, use_voice_limit=False):
         local_datetime = item.get("local_datetime")
         if not title or not local_datetime:
             continue
+
+        reminders = []
+        if has_paid_balance:
+            try:
+                remind = int(item.get("remind_minutes"))
+            except (TypeError, ValueError):
+                remind = None
+            if remind and 1 <= remind <= 7 * 1440:
+                reminders = [remind]
+
         event_id = create_event(
             uid,
             title,
             str(local_datetime),
             timezone_name,
-            default_reminders,
+            reminders,
         )
         if event_id:
             inserted_events += 1
+            if not reminders:
+                no_reminder_events.append((event_id, title))
 
     if use_voice_limit and not premium and free > 0:
         with db_lock:
@@ -2236,7 +2414,7 @@ def save_ai_result(uid, data, use_voice_limit=False):
             finally:
                 conn.close()
 
-    return inserted_tasks, inserted_events, completed
+    return inserted_tasks, inserted_events, completed, no_reminder_events
 
 
 # ============================================================
@@ -2321,6 +2499,23 @@ def send_answer(uid, text):
 # 10. ОБРАБОТЧИКИ ГОЛОСА И ТЕКСТА
 # ============================================================
 
+def send_reminder_picker(chat_id, uid, event_id, title):
+    """Предложить выбрать время напоминания для события (кнопки + своё время)."""
+    short = REMINDER_SHORT.get(get_user_lang(uid), REMINDER_SHORT["ru"])
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for key in REMINDER_QUICK:
+        markup.add(
+            types.InlineKeyboardButton(short[key], callback_data=f"evtrem:{event_id}:{key}")
+        )
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "remind_custom_btn"), callback_data=f"evtremc:{event_id}")
+    )
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "remind_skip"), callback_data=f"evtrems:{event_id}")
+    )
+    bot.send_message(chat_id, tr(uid, "remind_pick", title=title), reply_markup=markup)
+
+
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     uid = message.from_user.id
@@ -2371,6 +2566,10 @@ def handle_voice(message):
             events_text, events_markup = upcoming_events_text(uid)
             bot.send_message(message.chat.id, events_text, reply_markup=events_markup)
 
+        # События без напоминания — предлагаем выбрать время (кнопками/своё).
+        for event_id, title in counts[3]:
+            send_reminder_picker(message.chat.id, uid, event_id, title)
+
     except Exception:
         logger.exception("Voice handling failed for user %s", uid)
         try:
@@ -2393,6 +2592,27 @@ def handle_plain_text(message):
         return
 
     log_activity(uid)
+
+    # Ввод своего времени напоминания для конкретного события.
+    state = user_states.get(uid)
+    if isinstance(state, str) and state.startswith("custom_reminder:"):
+        event_id = state.split(":", 1)[1]
+        minutes = parse_custom_reminder(text)
+        if minutes is None:
+            bot.reply_to(message, tr(uid, "remind_custom_bad"))
+            return
+        try:
+            event_id_int = int(event_id)
+        except (TypeError, ValueError):
+            user_states.pop(uid, None)
+            bot.reply_to(message, tr(uid, "api_error"))
+            return
+        set_event_reminder(uid, event_id_int, minutes)
+        user_states.pop(uid, None)
+        bot.reply_to(
+            message, tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes]))
+        )
+        return
 
     # Ввод часового пояса.
     if user_states.get(uid) == "timezone":
@@ -2548,7 +2768,7 @@ def handle_plain_text(message):
     status = bot.reply_to(message, tr(uid, "processing"))
     try:
         result = analyze_user_text(uid, text)
-        save_ai_result(uid, result, use_voice_limit=False)
+        counts = save_ai_result(uid, result, use_voice_limit=False)
         try:
             bot.delete_message(message.chat.id, status.message_id)
         except Exception:
@@ -2561,6 +2781,10 @@ def handle_plain_text(message):
         if result.get("new_events"):
             event_text, event_markup = upcoming_events_text(uid)
             bot.send_message(message.chat.id, event_text, reply_markup=event_markup)
+
+        # События без напоминания — предлагаем выбрать время (кнопками/своё).
+        for event_id, title in counts[3]:
+            send_reminder_picker(message.chat.id, uid, event_id, title)
 
     except Exception:
         logger.exception("Text handling failed for user %s", uid)
