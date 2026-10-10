@@ -171,8 +171,7 @@ LANGS = {
         "reminder_options": "Напоминания: {value}",
         "event_card": (
             "📅 Событие: {title}\n"
-            "🕒 {date}\n"
-            "⏰ Напоминания: {reminders}"
+            "🕒 {date}"
         ),
         "premium": "🎙 Бесплатных голосовых разборов осталось: {free}.",
         "not_admin": "Команда доступна только администратору.",
@@ -366,8 +365,7 @@ LANGS = {
         "reminder_options": "Reminders: {value}",
         "event_card": (
             "📅 Event: {title}\n"
-            "🕒 {date}\n"
-            "⏰ Reminders: {reminders}"
+            "🕒 {date}"
         ),
         "premium": "🎙 Free voice analyses left: {free}.",
         "not_admin": "This command is available to the administrator only.",
@@ -520,8 +518,8 @@ REMINDER_QUICK = ("15", "30", "60")
 
 # Короткие подписи для кнопок под сообщением «выберите время напоминания».
 REMINDER_SHORT = {
-    "ru": {"15": "15 минут", "30": "30 минут", "60": "1 час"},
-    "en": {"15": "15 min", "30": "30 min", "60": "1 hour"},
+    "ru": {"15": "за 15 минут", "30": "за 30 минут", "60": "за 1 час"},
+    "en": {"15": "15 min before", "30": "30 min before", "60": "1 hour before"},
 }
 
 REMINDER_LABELS = {
@@ -1375,10 +1373,7 @@ def upcoming_events_text(uid):
         except json.JSONDecodeError:
             offsets = []
 
-        reminder_text = format_reminder_labels(uid, offsets)
-        lines.append(
-            tr(uid, "event_card", title=row["title"], date=date_text, reminders=reminder_text)
-        )
+        lines.append(tr(uid, "event_card", title=row["title"], date=date_text))
         markup.add(
             types.InlineKeyboardButton(
                 f"🗑 {row['title'][:30]}",
@@ -1837,9 +1832,6 @@ def calendar_open_day(call):
         lines = [tr(uid, "cal_day_title", date=day.strftime("%d.%m.%Y"))]
         for title, time_hhmm, fire_times in items:
             lines.append(f"• {title} — {time_hhmm}")
-            if fire_times:
-                stamps = ", ".join(t.strftime("%d.%m %H:%M") for t in fire_times)
-                lines.append(tr(uid, "cal_day_reminders", value=stamps))
     else:
         lines = [tr(uid, "cal_day_empty")]
 
@@ -2211,6 +2203,7 @@ Extract:
 2. new_tasks: short actionable items with exact category and text.
 3. new_events: events with title, local_datetime in ISO format YYYY-MM-DDTHH:MM,
    or null if the date/time is unclear.
+   The title must NOT contain the date or the time — they are shown separately.
 4. For each event, if the user explicitly asks to be reminded BEFORE it
    (e.g. "remind me 30 minutes before", "remind me 2 hours before",
    "remind me a day before"), set remind_minutes to that number of minutes
