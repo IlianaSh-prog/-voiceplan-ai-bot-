@@ -46,8 +46,9 @@ def db(sql, args=(), fetch=False):
 
 db("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (UID,))
 
-check("choices are 15/60/1440", list(bot.REMINDER_CHOICES) == ["15", "60", "1440"])
+check("choices include 15/30/60/1440", set(bot.REMINDER_CHOICES) == {"15", "30", "60", "1440"})
 check("no 10 in choices", "10" not in bot.REMINDER_CHOICES)
+check("quick buttons 15/30/60", list(bot.REMINDER_QUICK) == ["15", "30", "60"])
 
 # 1. Мультивыбор: все три интервала.
 db("UPDATE users SET reminder_offsets=? WHERE user_id=?", (json.dumps([1440, 60, 15]), UID))
@@ -105,6 +106,43 @@ check("event offsets migrated", sorted(ev_json) == [15, 60])
 new_due = (start - timedelta(minutes=15)).isoformat(timespec="seconds")
 due_rows = [r[0] for r in db("SELECT due_utc FROM reminders WHERE event_id=?", (ev,), fetch=True)]
 check("pending reminder moved to -15 min", due_rows == [new_due])
+
+# 5. Новая логика: событие без напоминания + произвольное время кнопками/текстом.
+check("parse_custom_reminder 30 min", bot.parse_custom_reminder("за 30 минут") == 30)
+check("parse_custom_reminder 2 hours", bot.parse_custom_reminder("за 2 часа") == 120)
+check("parse_custom_reminder 1 day", bot.parse_custom_reminder("за 1 день") == 1440)
+check("parse_custom_reminder garbage", bot.parse_custom_reminder("привет") is None)
+
+# Бесплатный пользователь (баланс 0): событие создаётся БЕЗ напоминания и попадает в список выбора.
+free_uid = 999999
+db("INSERT OR IGNORE INTO users (user_id, balance_paid, balance_bonus) VALUES (?, 0, 0)", (free_uid,))
+check("no paid balance", bot.has_paid_balance(free_uid) is False)
+future = (datetime.now(bot.ZoneInfo("Europe/Moscow")) + timedelta(days=5)).replace(tzinfo=None)
+data_free = {"new_events": [{"title": "Тест", "local_datetime": future.isoformat()}]}
+counts_free = bot.save_ai_result(free_uid, data_free, use_voice_limit=False)
+check("save_ai_result returns 4 values", len(counts_free) == 4)
+check("free event created without reminder", counts_free[1] == 1 and len(counts_free[3]) == 1)
+ev2_id, ev2_title = counts_free[3][0]
+check("picker carries event id/title", isinstance(ev2_id, int) and ev2_title == "Тест")
+rem2 = db("SELECT COUNT(*) c FROM reminders WHERE event_id=?", (ev2_id,), fetch=True)[0]["c"]
+check("free event has no reminder row", rem2 == 0)
+
+# Установка кнопкой «30 минут» создаёт одно напоминание.
+check("set_event_reminder 30", bot.set_event_reminder(free_uid, ev2_id, 30) == 30)
+rem3 = db("SELECT due_utc FROM reminders WHERE event_id=?", (ev2_id,), fetch=True)
+check("one reminder row after button", len(rem3) == 1)
+
+# Платный пользователь (баланс > 0): ИИ-время из remind_minutes применяется сразу.
+paid_uid = 999998
+db("INSERT OR IGNORE INTO users (user_id, balance_paid, balance_bonus) VALUES (?, 100, 0)", (paid_uid,))
+check("has paid balance", bot.has_paid_balance(paid_uid) is True)
+future2 = (datetime.now(bot.ZoneInfo("Europe/Moscow")) + timedelta(days=6)).replace(tzinfo=None)
+data_paid = {"new_events": [{"title": "Оплата", "local_datetime": future2.isoformat(), "remind_minutes": 90}]}
+counts_paid = bot.save_ai_result(paid_uid, data_paid, use_voice_limit=False)
+check("paid event no picker needed", counts_paid[1] == 1 and len(counts_paid[3]) == 0)
+ev3_id = db("SELECT event_id FROM events WHERE user_id=? ORDER BY event_id DESC LIMIT 1", (paid_uid,), fetch=True)[0]["event_id"]
+rem4 = db("SELECT due_utc FROM reminders WHERE event_id=?", (ev3_id,), fetch=True)
+check("paid event got 90-min reminder", len(rem4) == 1)
 
 print()
 print("SMOKE OK" if not failures else "FAILED: " + ", ".join(failures))
