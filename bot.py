@@ -8,6 +8,7 @@ import uuid
 import calendar as calmod
 import sqlite3
 import logging
+import socket
 import threading
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -41,14 +42,24 @@ class HealthHandler(BaseHTTPRequestHandler):
         return
 
 
-def run_health_server():
+def create_health_server():
+    """Создаёт health-сервер для Render (Render ждёт HTTP 200 на порту PORT)."""
     port = int(os.environ.get("PORT", "10000"))
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     logger.info("Health server listening on port %s", port)
-    server.serve_forever()
+    return server
 
 
-threading.Thread(target=run_health_server, daemon=True).start()
+def _port_in_use(port):
+    """True, если на порту уже кто-то СЛУШАЕТ (например, другой экземпляр бота).
+
+    Проверяем именно подключением (connect), а не привязкой (bind): на Windows
+    два сокета с SO_REUSEADDR могут занять один порт, поэтому bind — ненадёжный
+    «замок». А вот к слушающему сокету подключение проходит всегда.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
 # ============================================================
@@ -2137,7 +2148,7 @@ def transcribe_voice(file_path):
             headers=headers,
             files={"file": ("voice.ogg", audio, "audio/ogg")},
             data={"model": "whisper-1"},
-            timeout=(15, 120),
+            timeout=(30, 120),
         )
 
     if response.status_code != 200:
@@ -2235,7 +2246,7 @@ JSON schema:
             "response_format": {"type": "json_object"},
             "temperature": 0.1,
         },
-        timeout=(15, 60),
+        timeout=(30, 60),
     )
 
     if response.status_code != 200:
@@ -3618,6 +3629,31 @@ def bal_close(call):
 # ============================================================
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "10000"))
+
+    # Защита от повторного запуска. Если порт уже слушается — значит, бот уже
+    # запущен в другом окне/сервисе с тем же токеном. Это и есть причина ошибки
+    # Telegram 409: два процесса не могут одновременно получать обновления.
+    # Вместо бесконечного цикла «409 → жду 15 секунд» выходим сразу с подсказкой.
+    if _port_in_use(port):
+        logger.error(
+            "Порт %s уже занят — похоже, бот уже запущен в другом окне или на "
+            "другом сервисе с тем же токеном (ошибка 409). Закройте лишние окна "
+            "бота (или остановите службу на Render) и запустите заново.",
+            port,
+        )
+        sys.exit(1)
+
+    try:
+        health_server = create_health_server()
+    except OSError:
+        logger.error(
+            "Не удалось занять порт %s — возможно, он занят другой программой. "
+            "Укажите другой порт в переменной PORT.", port,
+        )
+        sys.exit(1)
+    threading.Thread(target=health_server.serve_forever, daemon=True).start()
+
     try:
         # Не запускайте другой процесс polling с этим же токеном.
         bot.remove_webhook()
