@@ -608,6 +608,7 @@ def init_db():
                     daily_chat_left INTEGER DEFAULT 3,
                     daily_image_left INTEGER DEFAULT 1,
                     show_spends INTEGER DEFAULT 1,
+                    ui_mode TEXT DEFAULT '',
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -629,6 +630,11 @@ def init_db():
                 "daily_chat_left": f"INTEGER DEFAULT {FREE_CHATS_PER_DAY}",
                 "daily_image_left": f"INTEGER DEFAULT {FREE_IMAGES_PER_DAY}",
                 "show_spends": "INTEGER DEFAULT 1",
+                # Долгоживущий режим интерфейса (чат / картинки). Хранится в БД,
+                # чтобы не теряться при перезапуске бота (Render засыпает/просыпается,
+                # локальный перезапуск). Временные состояния (категория, часовой пояс,
+                # своё время напоминания) по-прежнему живут в user_states.
+                "ui_mode": "TEXT DEFAULT ''",
             }
             for column, definition in migrations.items():
                 if column not in cols:
@@ -826,6 +832,69 @@ def get_user_data(uid):
             return (row["free_voice_left"], row["is_premium"]) if row else (5, 0)
         finally:
             conn.close()
+
+
+def get_ui_mode(uid):
+    """Долгоживущий режим интерфейса из БД: 'chat' / 'image_prompt' / '' (нет)."""
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT ui_mode FROM users WHERE user_id = ?", (uid,)
+            ).fetchone()
+            return (row["ui_mode"] or "") if row else ""
+        finally:
+            conn.close()
+
+
+def set_ui_mode(uid, mode):
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "UPDATE users SET ui_mode = ? WHERE user_id = ?", (mode or "", uid)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def ui_mode(uid):
+    """chat / image_prompt / '' — приоритет памяти процесса, фолбэк на БД.
+
+    Временные состояния ввода (category, timezone, custom_reminder:<id>)
+    отключают долгий режим чата/картинок, пока пользователь что-то вводит.
+    Память быстра в пределах сессии; БД — страховка при перезапуске бота.
+    """
+    mem = user_states.get(uid)
+    if isinstance(mem, str):
+        if mem in ("chat", "image_prompt"):
+            return mem
+        # Любой другой ввод (папка, часовой пояс, своё время) — не режим чата.
+        return ""
+    return get_ui_mode(uid)
+
+
+def enter_mode(uid, mode):
+    """Войти в режим интерфейса (chat / image_prompt) — память + БД."""
+    user_states[uid] = mode
+    set_ui_mode(uid, mode)
+
+
+def leave_mode(uid):
+    """Выйти из режима интерфейса — чистим и память, и БД."""
+    user_states.pop(uid, None)
+    set_ui_mode(uid, "")
+
+
+def begin_input(uid, state):
+    """Начать временный ввод (категория/часовой пояс/своё время).
+
+    Сбрасывает долгий режим чата/картинок и в БД тоже, иначе после ввода
+    чат неожиданно «включился» бы обратно из сохранённого ui_mode.
+    """
+    set_ui_mode(uid, "")
+    user_states[uid] = state
 
 
 def oferta_ok(uid):
@@ -1238,7 +1307,7 @@ def language_keyboard():
 @bot.message_handler(commands=["start"])
 def handle_start(message):
     register_user(message)
-    user_states.pop(message.from_user.id, None)
+    leave_mode(message.from_user.id)
 
     # Первый контакт: показываем публичную оферту, пока она не принята.
     if not oferta_ok(message.from_user.id):
@@ -2058,7 +2127,7 @@ def event_reminder_custom(call):
     """Кнопка «Своё время» — просим ввести время напоминания текстом."""
     uid = call.from_user.id
     event_id = call.data.split(":", 1)[1]
-    user_states[uid] = f"custom_reminder:{event_id}"
+    begin_input(uid, f"custom_reminder:{event_id}")
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, tr(uid, "remind_custom_prompt"))
 
@@ -2119,7 +2188,7 @@ def planner_router(call):
         edit_or_send(text, markup)
     elif action == "newcat":
         bot.answer_callback_query(call.id)
-        user_states[uid] = "category"
+        begin_input(uid, "category")
         bot.send_message(call.message.chat.id, tr(uid, "category_prompt"))
     else:
         bot.answer_callback_query(call.id)
@@ -2535,7 +2604,7 @@ def handle_voice(message):
 
     # В режиме «Чат с ИИ» голос — это вопрос нейросети, а не задача.
     # Распознаём речь и отдаём её в общий обработчик чата (ответ текстом).
-    if user_states.get(uid) == "chat":
+    if ui_mode(uid) == "chat":
         status = bot.reply_to(message, tr(uid, "processing"))
         path = os.path.join(
             tempfile.gettempdir(), f"voiceplan_{uid}_{message.message_id}.ogg"
@@ -2781,13 +2850,12 @@ def handle_plain_text(message):
         return
 
     # Режим «💬 Чат с ИИ»: обычный вопрос — ответ текстовой нейросети.
-    # Режим «💬 Чат с ИИ»: обычный вопрос — ответ текстовой нейросети.
-    if user_states.get(uid) == "chat":
+    if ui_mode(uid) == "chat":
         process_chat_message(message.chat.id, uid, text, reply_to=message.message_id)
         return
 
     # Режим «🎨 Картинки»: текст — промпт для генерации изображения.
-    if user_states.get(uid) == "image_prompt":
+    if ui_mode(uid) == "image_prompt":
         free, premium = get_user_data(uid)
         paid, bonus, tts_free, _chat, image_left, _show = get_balance(uid)
 
@@ -2927,7 +2995,7 @@ threading.Thread(target=reminder_worker, daemon=True).start()
 
 @bot.message_handler(commands=["new_category"])
 def new_category_command(message):
-    user_states[message.from_user.id] = "category"
+    begin_input(message.from_user.id, "category")
     bot.send_message(message.chat.id, tr(message.from_user.id, "category_prompt"))
 
 
@@ -2959,7 +3027,7 @@ def chat_command(message):
     uid = message.from_user.id
     if not oferta_gate(message):
         return
-    user_states[uid] = "chat"
+    enter_mode(uid, "chat")
     bot.send_message(
         message.chat.id, tr(uid, "chat_started"), reply_markup=main_keyboard(uid)
     )
@@ -2971,7 +3039,7 @@ def image_command(message):
     uid = message.from_user.id
     if not oferta_gate(message):
         return
-    user_states[uid] = "image_prompt"
+    enter_mode(uid, "image_prompt")
     bot.send_message(
         message.chat.id, tr(uid, "image_started"), reply_markup=main_keyboard(uid)
     )
@@ -3003,18 +3071,18 @@ def text_router(message):
         # Любая другая кнопка меню завершает режимы чата и картинки.
         if (
             text not in chat_buttons | image_buttons
-            and user_states.get(uid) in {"chat", "image_prompt"}
+            and ui_mode(uid) in {"chat", "image_prompt"}
         ):
-            user_states.pop(uid, None)
+            leave_mode(uid)
 
         if text in chat_buttons:
-            user_states[uid] = "chat"
+            enter_mode(uid, "chat")
             bot.send_message(
                 message.chat.id, tr(uid, "chat_started"), reply_markup=main_keyboard(uid)
             )
             return
         if text in image_buttons:
-            user_states[uid] = "image_prompt"
+            enter_mode(uid, "image_prompt")
             bot.send_message(
                 message.chat.id, tr(uid, "image_started"), reply_markup=main_keyboard(uid)
             )
@@ -3590,7 +3658,7 @@ def chat_speak(call):
 @bot.callback_query_handler(func=lambda call: call.data == "chat:exit")
 def chat_exit(call):
     uid = call.from_user.id
-    user_states.pop(uid, None)
+    leave_mode(uid)
     bot.answer_callback_query(call.id)
     bot.send_message(
         call.message.chat.id, tr(uid, "chat_exited"), reply_markup=main_keyboard(uid)
