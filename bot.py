@@ -182,6 +182,7 @@ LANGS = {
         "remind_done": "✅ Напоминание установлено: {value}.",
         "remind_skipped": "🚫 Напоминание не установлено.",
         "reminder": "⏰ Скоро событие: {title}\n🕒 {date}",
+        "task_reminder": "⏰ Напоминание о задаче: {title}\n📁 Папка: {category}",
         "reminder_options": "Напоминания: {value}",
         "event_card": (
             "📅 Событие: {title}\n"
@@ -377,6 +378,7 @@ LANGS = {
         "remind_done": "✅ Reminder set: {value}.",
         "remind_skipped": "🚫 No reminder set.",
         "reminder": "⏰ Upcoming event: {title}\n🕒 {date}",
+        "task_reminder": "⏰ Task reminder: {title}\n📁 Folder: {category}",
         "reminder_options": "Reminders: {value}",
         "event_card": (
             "📅 Event: {title}\n"
@@ -655,9 +657,27 @@ def init_db():
                     category TEXT NOT NULL,
                     task_text TEXT NOT NULL,
                     is_completed INTEGER DEFAULT 0,
+                    due_utc TEXT,
+                    remind_before_min INTEGER,
+                    remind_utc TEXT,
+                    remind_sent INTEGER DEFAULT 0,
+                    timezone TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Миграция существующей таблицы tasks без потери данных.
+            tcols = table_columns(conn, "tasks")
+            task_migrations = {
+                "due_utc": "TEXT",
+                "remind_before_min": "INTEGER",
+                "remind_utc": "TEXT",
+                "remind_sent": "INTEGER DEFAULT 0",
+                "timezone": "TEXT",
+            }
+            for column, definition in task_migrations.items():
+                if column not in tcols:
+                    conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} {definition}")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS events (
@@ -1752,6 +1772,53 @@ def set_event_reminder(uid, event_id, minutes):
             )
             conn.commit()
             return minutes
+        finally:
+            conn.close()
+
+
+def set_task_reminder(uid, task_id, minutes):
+    """Установить одно напоминание к задаче (по due_utc). Возвращает minutes или None."""
+    minutes = int(minutes)
+    now = datetime.now(timezone.utc)
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT due_utc, timezone FROM tasks WHERE task_id=? AND user_id=?",
+                (task_id, uid),
+            ).fetchone()
+            if not row or not row["due_utc"]:
+                return None
+            due = datetime.fromisoformat(row["due_utc"])
+            if due.tzinfo is None:
+                tz_name = row["timezone"] or "Europe/Moscow"
+                due = due.replace(tzinfo=ZoneInfo(tz_name)).astimezone(timezone.utc)
+            remind_at = due - timedelta(minutes=minutes)
+            # Напоминание не раньше «сейчас».
+            if remind_at < now:
+                remind_at = now
+            conn.execute(
+                "UPDATE tasks SET remind_before_min=?, remind_utc=?, remind_sent=0 "
+                "WHERE task_id=? AND user_id=?",
+                (minutes, remind_at.isoformat(timespec="seconds"), task_id, uid),
+            )
+            conn.commit()
+            return minutes
+        finally:
+            conn.close()
+
+
+def clear_task_reminder(uid, task_id):
+    """Убрать напоминание у задачи."""
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "UPDATE tasks SET remind_before_min=NULL, remind_utc=NULL, remind_sent=0 "
+                "WHERE task_id=? AND user_id=?",
+                (task_id, uid),
+            )
+            conn.commit()
         finally:
             conn.close()
 
@@ -2979,6 +3046,44 @@ def reminder_worker():
                     )
                 except Exception:
                     logger.exception("Reminder delivery failed for user %s", uid)
+
+            # Напоминания по задачам (папка + опциональная дата/время).
+            with db_lock:
+                conn = get_db()
+                try:
+                    task_rows = conn.execute(
+                        """SELECT task_id, user_id, task_text, category
+                              FROM tasks
+                             WHERE remind_utc IS NOT NULL AND remind_sent=0
+                               AND is_completed=0 AND remind_utc<=?
+                             ORDER BY remind_utc LIMIT 100""",
+                        (now,),
+                    ).fetchall()
+                    task_ids = [row["task_id"] for row in task_rows]
+                    if task_ids:
+                        placeholders = ",".join("?" for _ in task_ids)
+                        conn.execute(
+                            f"UPDATE tasks SET remind_sent=1 WHERE task_id IN ({placeholders})",
+                            task_ids,
+                        )
+                        conn.commit()
+                finally:
+                    conn.close()
+
+            for row in task_rows:
+                uid = row["user_id"]
+                try:
+                    bot.send_message(
+                        uid,
+                        tr(
+                            uid,
+                            "task_reminder",
+                            title=row["task_text"],
+                            category=row["category"] or "",
+                        ),
+                    )
+                except Exception:
+                    logger.exception("Task reminder delivery failed for user %s", uid)
 
         except Exception:
             logger.exception("Reminder worker error")
