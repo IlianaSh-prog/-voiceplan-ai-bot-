@@ -121,6 +121,9 @@ if not AI_API_KEY:
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=True)
 db_lock = threading.RLock()
 user_states = {}
+# Последний ответ ИИ в чате по каждому пользователю — чтобы кнопка «Озвучить»
+# могла озвучить именно его (callback не может нести длинный текст).
+last_answer = {}
 
 SYSTEM_CATEGORIES = {
     "ru": ["🔴 Срочно", "📅 Календарь", "🛒 Покупки", "💡 Идеи", "📥 Входящие"],
@@ -205,6 +208,7 @@ LANGS = {
         "btn_video": "🎬 Видео",
         "btn_oferta": "📖 Оферта",
         "btn_exit_chat": "↩️ Выйти из чата",
+        "btn_speak": "🔊 Озвучить",
         "oferta_accept_btn": "✅ Принимаю условия",
         "oferta_required": (
             "⚠️ Чтобы пользоваться ботом, сначала примите условия оферты — "
@@ -399,6 +403,7 @@ LANGS = {
         "btn_video": "🎬 Video",
         "btn_oferta": "📖 Terms",
         "btn_exit_chat": "↩️ Exit chat",
+        "btn_speak": "🔊 Speak aloud",
         "oferta_accept_btn": "✅ I accept the terms",
         "oferta_required": (
             "⚠️ To use the bot, please accept the terms of the offer first — "
@@ -1279,20 +1284,21 @@ def handle_help(message):
 # ============================================================
 
 def _planner_nav(uid, markup):
-    """Навигация раздела «Задачи и календарь» (единая кнопка в главном меню)."""
-    _tz, _offsets, voice_on = get_user_preferences(uid)
-    voice_label = tr(uid, "voice_on") if voice_on else tr(uid, "voice_off")
+    """Навигация раздела «Задачи и календарь» (единая кнопка в главном меню).
+
+    Озвучка ответов живёт в чате с ИИ (кнопка «🔊 Озвучить» под ответом),
+    поэтому здесь переключателя озвучки больше нет.
+    """
     markup.row(
         types.InlineKeyboardButton(tr(uid, "nav_folders"), callback_data="planner:folders"),
         types.InlineKeyboardButton(tr(uid, "nav_calendar"), callback_data="planner:calendar"),
     )
     markup.row(
-        types.InlineKeyboardButton(tr(uid, "nav_reminders"), callback_data="setting:reminders"),
-        types.InlineKeyboardButton(voice_label, callback_data="setting:voice"),
-    )
-    markup.row(
         types.InlineKeyboardButton(tr(uid, "nav_events"), callback_data="planner:events"),
         types.InlineKeyboardButton(tr(uid, "nav_newcat"), callback_data="planner:newcat"),
+    )
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "nav_reminders"), callback_data="setting:reminders"),
     )
     return markup
 
@@ -2526,6 +2532,40 @@ def handle_voice(message):
     if not oferta_gate(message):
         return
     log_activity(uid)
+
+    # В режиме «Чат с ИИ» голос — это вопрос нейросети, а не задача.
+    # Распознаём речь и отдаём её в общий обработчик чата (ответ текстом).
+    if user_states.get(uid) == "chat":
+        status = bot.reply_to(message, tr(uid, "processing"))
+        path = os.path.join(
+            tempfile.gettempdir(), f"voiceplan_{uid}_{message.message_id}.ogg"
+        )
+        try:
+            file_info = bot.get_file(message.voice.file_id)
+            audio = bot.download_file(file_info.file_path)
+            with open(path, "wb") as output:
+                output.write(audio)
+
+            transcript = transcribe_voice(path)
+            try:
+                bot.delete_message(message.chat.id, status.message_id)
+            except Exception:
+                pass
+            if not transcript:
+                bot.reply_to(message, tr(uid, "no_speech"))
+                return
+            process_chat_message(message.chat.id, uid, transcript, reply_to=message.message_id)
+        except Exception:
+            logger.exception("Voice chat failed for user %s", uid)
+            try:
+                bot.edit_message_text(tr(uid, "api_error"), message.chat.id, status.message_id)
+            except Exception:
+                bot.send_message(message.chat.id, tr(uid, "api_error"))
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+        return
+
     free, premium = get_user_data(uid)
 
     if free <= 0 and not premium:
@@ -2583,6 +2623,84 @@ def handle_voice(message):
     finally:
         if os.path.exists(path):
             os.remove(path)
+
+
+def chat_answer_markup(uid, answer):
+    """Клавиатура под ответом ИИ: «🔊 Озвучить» (если озвучка доступна) + выход."""
+    markup = types.InlineKeyboardMarkup()
+    paid, bonus, tts_free, _chat, _img, _show = get_balance(uid)
+    tts_cost = round(len(answer[:3500]) / 1000 * PRICE_TTS_RUB_PER_1K, 3)
+    # Кнопка озвучки появляется только если хватает пробных попыток или баланса.
+    can_speak = bool(TTS_API_URL and TTS_API_KEY) and (
+        tts_free > 0 or (paid + bonus) >= tts_cost
+    )
+    if can_speak:
+        markup.add(types.InlineKeyboardButton(tr(uid, "btn_speak"), callback_data="chat:speak"))
+    markup.add(types.InlineKeyboardButton(tr(uid, "btn_exit_chat"), callback_data="chat:exit"))
+    return markup
+
+
+def process_chat_message(chat_id, uid, text, reply_to=None):
+    """Единая обработка вопроса в чате с ИИ (из текста или голоса).
+
+    Списывает квоту/баланс, получает ответ нейросети и присылает его ТЕКСТОМ.
+    Если у пользователя есть пробные озвучки или баланс — под текстом
+    появляется кнопка «🔊 Озвучить».
+    """
+    free, premium = get_user_data(uid)
+    paid, bonus, tts_free, chat_left, _img, _show = get_balance(uid)
+
+    # Порядок списания: дневная бесплатная норма → баланс → отказ.
+    # Легаси-Premium (старая подписка) ходит без списания.
+    spend_amount = 0.0
+    daily_free = True
+    if premium:
+        pass
+    elif chat_left > 0:
+        pass
+    elif paid + bonus >= PRICE_CHAT_RUB:
+        daily_free = False
+        spend_amount = PRICE_CHAT_RUB
+    else:
+        bot.send_message(
+            chat_id, tr(uid, "tries_limit"), reply_to_message_id=reply_to,
+            reply_markup=balance_open_markup(uid),
+        )
+        return
+
+    status = bot.send_message(chat_id, tr(uid, "processing"), reply_to_message_id=reply_to)
+    try:
+        answer = ai_chat_reply(uid, text)
+        if daily_free and not premium:
+            consume_daily(uid, "chat")
+        elif not daily_free:
+            spend_from_balance(uid, spend_amount)
+            maybe_receipt(uid, spend_amount, "spend_chat")
+
+        # Запоминаем ответ, чтобы кнопка «Озвучить» знала, что озвучивать.
+        last_answer[uid] = answer
+        markup = chat_answer_markup(uid, answer)
+
+        try:
+            bot.delete_message(chat_id, status.message_id)
+        except Exception:
+            pass
+
+        # Сообщение Telegram не длиннее 4096 символов — режем на части.
+        for start in range(0, len(answer), 4000):
+            chunk = answer[start:start + 4000]
+            bot.send_message(
+                chat_id,
+                chunk,
+                reply_to_message_id=reply_to if start == 0 else None,
+                reply_markup=markup if start + 4000 >= len(answer) else None,
+            )
+    except Exception:
+        logger.exception("AI chat failed for user %s", uid)
+        try:
+            bot.edit_message_text(tr(uid, "api_error"), chat_id, status.message_id)
+        except Exception:
+            bot.send_message(chat_id, tr(uid, "api_error"), reply_to_message_id=reply_to)
 
 
 def handle_plain_text(message):
@@ -2663,62 +2781,9 @@ def handle_plain_text(message):
         return
 
     # Режим «💬 Чат с ИИ»: обычный вопрос — ответ текстовой нейросети.
+    # Режим «💬 Чат с ИИ»: обычный вопрос — ответ текстовой нейросети.
     if user_states.get(uid) == "chat":
-        free, premium = get_user_data(uid)
-        paid, bonus, tts_free, chat_left, _img, _show = get_balance(uid)
-
-        # Порядок списания: дневная бесплатная норма → баланс → отказ.
-        # Легаси-Premium (старая подписка) ходит без списания.
-        spend_amount = 0.0
-        daily_free = True
-        if premium:
-            pass
-        elif chat_left > 0:
-            pass
-        elif paid + bonus >= PRICE_CHAT_RUB:
-            daily_free = False
-            spend_amount = PRICE_CHAT_RUB
-        else:
-            bot.reply_to(
-                message, tr(uid, "tries_limit"), reply_markup=balance_open_markup(uid)
-            )
-            return
-
-        status = bot.reply_to(message, tr(uid, "processing"))
-        try:
-            answer = ai_chat_reply(uid, text)
-            if daily_free and not premium:
-                consume_daily(uid, "chat")
-            elif not daily_free:
-                spend_from_balance(uid, spend_amount)
-                maybe_receipt(uid, spend_amount, "spend_chat")
-            try:
-                bot.delete_message(message.chat.id, status.message_id)
-            except Exception:
-                pass
-
-            markup = types.InlineKeyboardMarkup()
-            markup.add(
-                types.InlineKeyboardButton(
-                    tr(uid, "btn_exit_chat"), callback_data="chat:exit"
-                )
-            )
-            # Озвучка ответов: голосом при включённой настройке, иначе текстом.
-            _tzo, _ofz, voice_on = get_user_preferences(uid)
-            if voice_on:
-                send_answer(uid, answer)
-            else:
-                # Сообщение Telegram не длиннее 4096 символов — режем на части.
-                for start in range(0, len(answer), 4000):
-                    chunk = answer[start:start + 4000]
-                    bot.send_message(
-                        message.chat.id,
-                        chunk,
-                        reply_markup=markup if start + 4000 >= len(answer) else None,
-                    )
-        except Exception:
-            logger.exception("AI chat failed for user %s", uid)
-            bot.send_message(message.chat.id, tr(uid, "api_error"))
+        process_chat_message(message.chat.id, uid, text, reply_to=message.message_id)
         return
 
     # Режим «🎨 Картинки»: текст — промпт для генерации изображения.
@@ -3477,6 +3542,49 @@ def oferta_show(call):
         call.message.chat.id,
         tr(call.from_user.id, "oferta_text", contact=SUPPORT_CONTACT),
     )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "chat:speak")
+def chat_speak(call):
+    """Кнопка «🔊 Озвучить» под ответом ИИ — присылает ответ голосом."""
+    uid = call.from_user.id
+    answer = last_answer.get(uid)
+    if not answer:
+        bot.answer_callback_query(call.id, "Нет текста для озвучки.")
+        return
+
+    paid, bonus, tts_free, _chat, _img, _show = get_balance(uid)
+    tts_cost = round(len(answer[:3500]) / 1000 * PRICE_TTS_RUB_PER_1K, 3)
+    use_trial = tts_free > 0
+    use_paid = not use_trial and (paid + bonus) >= tts_cost
+    if not (TTS_API_URL and TTS_API_KEY and (use_trial or use_paid)):
+        bot.answer_callback_query(call.id, "🔇 Озвучка недоступна — нужен баланс.")
+        return
+
+    bot.answer_callback_query(call.id, "🔊 Озвучиваю…")
+    path = os.path.join(tempfile.gettempdir(), f"voiceplan_tts_{uid}_{uuid.uuid4().hex}.ogg")
+    try:
+        if synthesize_speech(answer, path):
+            with open(path, "rb") as audio:
+                bot.send_voice(call.message.chat.id, audio)
+            if use_trial:
+                consume_tts_trial(uid)
+            else:
+                spend_from_balance(uid, tts_cost)
+                maybe_receipt(uid, tts_cost, "spend_tts")
+            log_ai_request(
+                uid,
+                "tts",
+                cost_rub=round(len(answer[:3500]) / 1000 * TTS_PRICE_RUB_PER_1K, 3),
+            )
+        else:
+            bot.send_message(call.message.chat.id, tr(uid, "api_error"))
+    except Exception:
+        logger.exception("chat:speak TTS failed for user %s", uid)
+        bot.send_message(call.message.chat.id, tr(uid, "api_error"))
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "chat:exit")
