@@ -126,8 +126,8 @@ user_states = {}
 last_answer = {}
 
 SYSTEM_CATEGORIES = {
-    "ru": ["🔴 Срочно", "📅 Календарь", "🛒 Покупки", "💡 Идеи", "📥 Входящие"],
-    "en": ["🔴 Urgent", "📅 Calendar", "🛒 Groceries", "💡 Ideas", "📥 Inbox"],
+    "ru": ["🔴 Срочно", "📋 Повседневное", "⭐ Важно"],
+    "en": ["🔴 Urgent", "📋 Daily", "⭐ Important"],
 }
 
 LANGS = {
@@ -325,6 +325,49 @@ LANGS = {
         "nav_events": "📅 События",
         "nav_newcat": "➕ Новая папка",
         "nav_tasks": "⬅️ К задачам",
+        "task_reminder_need_balance": (
+            "⏰ Напоминания к задачам доступны при положительном балансе.\n"
+            "Задача сохранена, но напоминание не установлено:"
+        ),
+        "task_reminder_need_balance_item": "• {task}",
+        "planner_menu": (
+            "📋 Задачи и календарь\n\nВыберите раздел:"
+        ),
+        "btn_my_tasks": "✅ Мои задачи",
+        "nav_calendar_menu": "🗓 Календарь",
+        "nav_back_menu": "⬅️ Назад в меню",
+        "mytasks_hint": (
+            "✍️ Наговорите или напишите свою задачу.\n\n"
+            "Можно указать:\n"
+            "• дату и время задачи (например, «завтра в 10:00»);\n"
+            "• за сколько напомнить (например, «напомни за 15 минут»).\n\n"
+            "⏰ Напоминания работают при положительном балансе. "
+            "На бесплатном тарифе задачи можно записывать голосом или текстом, "
+            "а напоминание подключить позже."
+        ),
+        "mytasks_hint_free_reminder": (
+            "🔒 Напоминания доступны при положительном балансе. "
+            "Задача сохранена без напоминания."
+        ),
+        "btn_goto_my_tasks": "📂 Перейти в мои задачи",
+        "btn_open_task": "📄 Открыть",
+        "btn_pay_reminder": "💳 Подключить напоминание",
+        "task_folder_menu_title": "📂 Выберите папку:",
+        "task_card_title": "📝 {title}",
+        "task_card_due": "🕒 Срок: {date}",
+        "task_card_reminder": "⏰ Напомню за {value}",
+        "task_card_reminder_off": "⏰ Напоминание не установлено",
+        "task_done_btn": "✅ Сделано",
+        "task_undone_btn": "↩️ Вернуть",
+        "task_remind_btn": "⏰ Напомнить",
+        "task_remind_free_hint": (
+            "⏰ Напоминание к задаче доступно при положительном балансе. "
+            "Пополните баланс, чтобы подключить напоминание."
+        ),
+        "task_need_due_for_reminder": (
+            "Чтобы поставить напоминание, укажите дату и время задачи "
+            "(например, «завтра в 10:00»)."
+        ),
         "report_usage": "Формат отчёта:\n/report 01.10.2026 10:00 05.10.2026 23:59\nили без времени: /report 01.10 05.10",
     },
     "en": {
@@ -514,6 +557,46 @@ LANGS = {
         "video_stub": "🎬 Video generation is coming very soon!",
         "yookassa_stub": "💳 YooKassa payments are not connected yet. Coming soon!",
         "btn_planner": "📋 Tasks & calendar",
+        "task_reminder_need_balance": (
+            "⏰ Task reminders are available with a positive balance.\n"
+            "The task was saved, but no reminder was set:"
+        ),
+        "task_reminder_need_balance_item": "• {task}",
+        "planner_menu": "📋 Tasks & calendar\n\nChoose a section:",
+        "btn_my_tasks": "✅ My tasks",
+        "nav_calendar_menu": "🗓 Calendar",
+        "nav_back_menu": "⬅️ Back to menu",
+        "mytasks_hint": (
+            "✍️ Record or type your task.\n\n"
+            "You can specify:\n"
+            "• task date and time (e.g. \"tomorrow at 10:00\");\n"
+            "• how long before to remind (e.g. \"remind 15 minutes before\").\n\n"
+            "⏰ Reminders work with a positive balance. On the free plan you can "
+            "record tasks by voice or text and enable a reminder later."
+        ),
+        "mytasks_hint_free_reminder": (
+            "🔒 Reminders are available with a positive balance. "
+            "Task saved without a reminder."
+        ),
+        "btn_goto_my_tasks": "📂 Go to my tasks",
+        "btn_open_task": "📄 Open",
+        "btn_pay_reminder": "💳 Enable reminder",
+        "task_folder_menu_title": "📂 Choose a folder:",
+        "task_card_title": "📝 {title}",
+        "task_card_due": "🕒 Due: {date}",
+        "task_card_reminder": "⏰ Remind {value} before",
+        "task_card_reminder_off": "⏰ No reminder set",
+        "task_done_btn": "✅ Done",
+        "task_undone_btn": "↩️ Undo",
+        "task_remind_btn": "⏰ Remind",
+        "task_remind_free_hint": (
+            "⏰ Task reminders are available with a positive balance. "
+            "Top up your balance to enable a reminder."
+        ),
+        "task_need_due_for_reminder": (
+            "To set a reminder, specify the task date and time "
+            "(e.g. \"tomorrow at 10:00\")."
+        ),
         "nav_folders": "📂 Folders",
         "nav_calendar": "🗓 Calendar",
         "nav_reminders": "⏰ Reminders",
@@ -1373,23 +1456,27 @@ def handle_help(message):
 # ============================================================
 
 def _planner_nav(uid, markup):
-    """Навигация раздела «Задачи и календарь» (единая кнопка в главном меню).
+    """Меню раздела «Задачи и календарь»: Мои задачи, Календарь, Назад в меню.
 
-    Озвучка ответов живёт в чате с ИИ (кнопка «🔊 Озвучить» под ответом),
-    поэтому здесь переключателя озвучки больше нет.
+    Озвучка ответов живёт в чате с ИИ (кнопка «🔊 Озвучить» под ответом).
     """
     markup.row(
-        types.InlineKeyboardButton(tr(uid, "nav_folders"), callback_data="planner:folders"),
-        types.InlineKeyboardButton(tr(uid, "nav_calendar"), callback_data="planner:calendar"),
+        types.InlineKeyboardButton(tr(uid, "btn_my_tasks"), callback_data="planner:menu_tasks"),
     )
     markup.row(
-        types.InlineKeyboardButton(tr(uid, "nav_events"), callback_data="planner:events"),
-        types.InlineKeyboardButton(tr(uid, "nav_newcat"), callback_data="planner:newcat"),
+        types.InlineKeyboardButton(tr(uid, "nav_calendar_menu"), callback_data="planner:menu_calendar"),
     )
     markup.row(
-        types.InlineKeyboardButton(tr(uid, "nav_reminders"), callback_data="setting:reminders"),
+        types.InlineKeyboardButton(tr(uid, "nav_back_menu"), callback_data="menu:main"),
     )
     return markup
+
+
+def planner_menu(uid):
+    """Главное меню раздела «Задачи и календарь»."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    _planner_nav(uid, markup)
+    return tr(uid, "planner_menu"), markup
 
 
 def dashboard(uid):
@@ -1436,10 +1523,10 @@ def dashboard(uid):
 
 @bot.message_handler(commands=["tasks"])
 @bot.message_handler(func=lambda m: bool(m.text) and m.text in {
-    LANGS["ru"]["btn_tasks"], LANGS["en"]["btn_tasks"]
+    LANGS["ru"]["btn_planner"], LANGS["en"]["btn_planner"]
 })
 def show_tasks(message):
-    text, markup = dashboard(message.from_user.id)
+    text, markup = planner_menu(message.from_user.id)
     bot.send_message(message.chat.id, text, reply_markup=markup)
 
 
@@ -1503,52 +1590,37 @@ def show_events(message):
 @bot.message_handler(func=lambda m: bool(m.text) and m.text in {
     LANGS["ru"]["btn_folders"], LANGS["en"]["btn_folders"]
 })
+def my_tasks_screen(uid):
+    """Экран «Мои задачи»: подсказка как оформить задачу + кнопка перехода к папкам."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
+        )
+    )
+    markup.add(
+        types.InlineKeyboardButton(tr(uid, "nav_back_menu"), callback_data="menu:main")
+    )
+    return tr(uid, "mytasks_hint"), markup
+
+
 def folders_view(uid):
-    """Список папок с задачами + кнопки навигации (общая для сообщения и callback)."""
+    """Список папок пользователя (все) + «Новая папка» + назад к задачам/меню."""
     categories = get_user_categories(uid)
-    lines = []
-    found = False
-    filled = []  # (индекс в categories, название) — для кнопок просмотра папки
+    text = tr(uid, "task_folder_menu_title")
 
-    with db_lock:
-        conn = get_db()
-        try:
-            for index, category in enumerate(categories):
-                rows = conn.execute(
-                    """SELECT task_text, is_completed FROM tasks
-                       WHERE user_id = ? AND category = ?
-                       ORDER BY is_completed ASC, task_id DESC""",
-                    (uid, category),
-                ).fetchall()
-
-                if not rows:
-                    continue
-
-                found = True
-                filled.append((index, category))
-                lines.append(f"📁 {category}")
-                for row in rows:
-                    done = bool(row["is_completed"])
-                    task = f"~{row['task_text']}~" if done else row["task_text"]
-                    lines.append(f"{'🟢' if done else '🔴'} {task}")
-                lines.append("")
-        finally:
-            conn.close()
-
-    text = "\n".join(lines) if found else tr(uid, "folders_empty")
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    if filled:
-        buttons = [
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for index, category in enumerate(categories):
+        markup.add(
             types.InlineKeyboardButton(
-                f"📁 {category[:20]}", callback_data=f"folder:{index}"
+                f"📁 {category}", callback_data=f"folder:{index}"
             )
-            for index, category in filled
-        ]
-        for i in range(0, len(buttons), 2):
-            markup.row(*buttons[i:i + 2])
-    markup.row(
-        types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:tasks")
+        )
+    markup.add(
+        types.InlineKeyboardButton(tr(uid, "nav_newcat"), callback_data="planner:newcat")
+    )
+    markup.add(
+        types.InlineKeyboardButton(tr(uid, "nav_back_menu"), callback_data="menu:main")
     )
     return text, markup
 
@@ -1636,29 +1708,68 @@ def delete_event(call):
 # 5.1 ПРОСМОТР ОДНОЙ ПАПКИ
 # ============================================================
 
+def _task_due_label(uid, due_utc, timezone_name):
+    """Локальная дата/время задачи «12.10 10:00» или '' если срока нет."""
+    if not due_utc:
+        return ""
+    try:
+        tz = ZoneInfo(timezone_name) if timezone_name else ZoneInfo("Europe/Moscow")
+        local = datetime.fromisoformat(due_utc).astimezone(tz)
+        return local.strftime("%d.%m %H:%M")
+    except Exception:
+        return ""
+
+
+def _task_reminder_label(uid, remind_before_min):
+    """Подпись напоминания «за 15 минут» или None если напоминания нет."""
+    if not remind_before_min:
+        return None
+    labels = REMINDER_LABELS[get_user_lang(uid)]
+    return labels.get(str(int(remind_before_min)), f"{int(remind_before_min)} мин")
+
+
 def folder_tasks_text(uid, category):
-    """Список задач одной папки."""
+    """Содержимое одной папки: карточки задач с напоминанием + кнопка назад."""
     with db_lock:
         conn = get_db()
         try:
             rows = conn.execute(
-                """SELECT task_text, is_completed FROM tasks
-                   WHERE user_id = ? AND category = ?
-                   ORDER BY is_completed ASC, task_id DESC""",
+                """SELECT task_id, task_text, is_completed, due_utc,
+                          remind_before_min, timezone
+                     FROM tasks WHERE user_id = ? AND category = ?
+                     ORDER BY is_completed ASC, task_id DESC""",
                 (uid, category),
             ).fetchall()
         finally:
             conn.close()
 
-    if not rows:
-        return f"📁 {category}\n" + tr(uid, "folders_empty")
-
     lines = [f"📁 {category}"]
+    if not rows:
+        lines.append(tr(uid, "folders_empty"))
     for row in rows:
         done = bool(row["is_completed"])
-        task = f"~{row['task_text']}~" if done else row["task_text"]
-        lines.append(f"{'🟢' if done else '🔴'} {task}")
-    return "\n".join(lines)
+        bullet = "🟢" if done else "🔴"
+        body = f"~{row['task_text']}~" if done else row["task_text"]
+        lines.append(f"{bullet} {body}")
+        remind = _task_reminder_label(uid, row["remind_before_min"])
+        if remind:
+            lines.append(f"   ⏰ за {remind}")
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for row in rows:
+        label = row["task_text"][:30]
+        prefix = "✅" if row["is_completed"] else "📄"
+        markup.add(
+            types.InlineKeyboardButton(
+                f"{prefix} {label}", callback_data=f"taskcard:{row['task_id']}"
+            )
+        )
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
+        )
+    )
+    return "\n".join(lines), markup
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("folder:"))
@@ -1671,7 +1782,293 @@ def open_folder(call):
         bot.answer_callback_query(call.id, "Invalid folder")
         return
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, folder_tasks_text(uid, category))
+    text, markup = folder_tasks_text(uid, category)
+    try:
+        bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+
+
+def _task_card(uid, task_id):
+    """Данные задачи для карточки или None."""
+    with db_lock:
+        conn = get_db()
+        try:
+            return conn.execute(
+                """SELECT task_id, task_text, category, is_completed,
+                          due_utc, remind_before_min, timezone
+                     FROM tasks WHERE task_id=? AND user_id=?""",
+                (task_id, uid),
+            ).fetchone()
+        finally:
+            conn.close()
+
+
+def task_card_text(uid, row):
+    """Текст карточки одной задачи (название + срок + напоминание)."""
+    lines = [tr(uid, "task_card_title", title=row["task_text"])]
+    due = _task_due_label(uid, row["due_utc"], row["timezone"])
+    if due:
+        lines.append(tr(uid, "task_card_due", date=due))
+    remind = _task_reminder_label(uid, row["remind_before_min"])
+    if remind:
+        lines.append(tr(uid, "task_card_reminder", value=remind))
+    else:
+        lines.append(tr(uid, "task_card_reminder_off"))
+    return "\n".join(lines)
+
+
+def task_card_markup(uid, row):
+    """Кнопки карточки задачи: Сделано/Вернуть, Напомнить, назад к папкам."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    done = bool(row["is_completed"])
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "task_undone_btn" if done else "task_done_btn"),
+            callback_data=f"tasktoggle:{row['task_id']}",
+        )
+    )
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "task_remind_btn"),
+            callback_data=f"taskrem:{row['task_id']}",
+        )
+    )
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
+        )
+    )
+    return markup
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("taskcard:"))
+def show_task_card(call):
+    uid = call.from_user.id
+    try:
+        task_id = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid task")
+        return
+    row = _task_card(uid, task_id)
+    if not row:
+        bot.answer_callback_query(call.id, "Task not found")
+        return
+    bot.answer_callback_query(call.id)
+    text = task_card_text(uid, row)
+    markup = task_card_markup(uid, row)
+    try:
+        bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("tasktoggle:"))
+def toggle_task_card(call):
+    uid = call.from_user.id
+    try:
+        task_id = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid task")
+        return
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT is_completed FROM tasks WHERE task_id=? AND user_id=?",
+                (task_id, uid),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE tasks SET is_completed=? WHERE task_id=? AND user_id=?",
+                    (0 if row["is_completed"] else 1, task_id, uid),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+    row = _task_card(uid, task_id)
+    bot.answer_callback_query(call.id)
+    if not row:
+        return
+    text = task_card_text(uid, row)
+    markup = task_card_markup(uid, row)
+    try:
+        bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "menu:main")
+def back_to_main_menu(call):
+    """Кнопка «⬅️ Назад в меню» — показать главное меню бота."""
+    uid = call.from_user.id
+    leave_mode(uid)
+    bot.answer_callback_query(call.id)
+    _paid, _bonus, _tts, chats, images, _show = get_balance(uid)
+    bot.send_message(
+        call.message.chat.id,
+        tr(
+            uid,
+            "welcome",
+            name=call.from_user.first_name or "друг",
+            chats=chats,
+            images=images,
+            total=f"{_paid + _bonus:.2f}",
+        ),
+        reply_markup=main_keyboard(uid),
+    )
+
+
+def task_reminder_markup(uid, task_id):
+    """Кнопки выбора времени напоминания для задачи (по образцу событий)."""
+    short = REMINDER_SHORT.get(get_user_lang(uid), REMINDER_SHORT["ru"])
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for key in REMINDER_QUICK:
+        markup.add(
+            types.InlineKeyboardButton(
+                short[key], callback_data=f"taskremq:{task_id}:{key}"
+            )
+        )
+    markup.row(
+        types.InlineKeyboardButton(
+            tr(uid, "remind_custom_btn"), callback_data=f"taskremc:{task_id}"
+        )
+    )
+    markup.row(
+        types.InlineKeyboardButton(
+            tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
+        )
+    )
+    return markup
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("taskrem:"))
+def task_reminder_pick(call):
+    """Кнопка «⏰ Напомнить» в карточке задачи — предложить время напоминания.
+
+    Напоминания доступны только при положительном балансе: иначе показываем
+    подсказку и кнопку пополнения (оплата).
+    """
+    uid = call.from_user.id
+    task_id = call.data.split(":", 1)[1]
+    row = _task_card(uid, int(task_id)) if task_id.isdigit() else None
+    if not row:
+        bot.answer_callback_query(call.id, "Task not found")
+        return
+
+    paid, bonus, _tts, _chat, _img, _show = get_balance(uid)
+    if (paid + bonus) <= 0:
+        # Бесплатно напоминания недоступны — предлагаем оплату.
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup")
+        )
+        markup.add(
+            types.InlineKeyboardButton(
+                tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
+            )
+        )
+        bot.answer_callback_query(call.id)
+        try:
+            bot.edit_message_text(
+                tr(uid, "task_remind_free_hint"),
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup,
+            )
+        except Exception:
+            bot.send_message(
+                call.message.chat.id, tr(uid, "task_remind_free_hint"), reply_markup=markup
+            )
+        return
+
+    if not row["due_utc"]:
+        # Без даты/времени напоминание не к чему привязать.
+        bot.answer_callback_query(call.id, "⚠️")
+        bot.send_message(call.message.chat.id, tr(uid, "task_need_due_for_reminder"))
+        return
+
+    bot.answer_callback_query(call.id)
+    markup = task_reminder_markup(uid, task_id)
+    try:
+        bot.edit_message_text(
+            tr(uid, "remind_pick", title=row["task_text"]),
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup,
+        )
+    except Exception:
+        bot.send_message(
+            call.message.chat.id,
+            tr(uid, "remind_pick", title=row["task_text"]),
+            reply_markup=markup,
+        )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("taskremq:"))
+def task_reminder_quick(call):
+    """Быстрая установка напоминания задачи (15/30/60 мин)."""
+    uid = call.from_user.id
+    try:
+        _, task_id, value = call.data.split(":", 2)
+        minutes = int(value)
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+
+    paid, bonus, _tts, _chat, _img, _show = get_balance(uid)
+    if (paid + bonus) <= 0:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup")
+        )
+        bot.answer_callback_query(call.id)
+        try:
+            bot.edit_message_text(
+                tr(uid, "task_remind_free_hint"),
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup,
+            )
+        except Exception:
+            bot.send_message(
+                call.message.chat.id, tr(uid, "task_remind_free_hint"), reply_markup=markup
+            )
+        return
+
+    result = set_task_reminder(uid, int(task_id), minutes)
+    if not result:
+        bot.answer_callback_query(call.id, "⚠️ Укажите дату/время задачи")
+        bot.send_message(call.message.chat.id, tr(uid, "task_need_due_for_reminder"))
+        return
+    bot.answer_callback_query(call.id, "✅")
+    try:
+        bot.edit_message_text(
+            tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes])),
+            call.message.chat.id,
+            call.message.message_id,
+        )
+    except Exception:
+        bot.send_message(
+            call.message.chat.id,
+            tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes])),
+        )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("taskremc:"))
+def task_reminder_custom(call):
+    """Кнопка «Своё время» — ввод времени напоминания задачи текстом."""
+    uid = call.from_user.id
+    task_id = call.data.split(":", 1)[1]
+    begin_input(uid, f"task_reminder:{task_id}")
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, tr(uid, "remind_custom_prompt"))
 
 
 # ============================================================
@@ -2218,7 +2615,7 @@ def event_reminder_skip(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("planner:"))
 def planner_router(call):
-    """Единый раздел: задачи, папки, календарь, события, новая папка."""
+    """Единый раздел: меню, мои задачи, папки, календарь, события, новая папка."""
     uid = call.from_user.id
     action = call.data.split(":", 1)[1]
 
@@ -2233,22 +2630,22 @@ def planner_router(call):
         except Exception:
             bot.send_message(call.message.chat.id, text, reply_markup=markup)
 
-    back_markup = types.InlineKeyboardMarkup()
-    back_markup.add(
-        types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:tasks")
-    )
-
-    if action == "tasks":
+    if action in {"menu", "tasks"}:
         bot.answer_callback_query(call.id)
-        text, markup = dashboard(uid)
+        text, markup = planner_menu(uid)
         edit_or_send(text, markup)
-    elif action == "calendar":
+    elif action == "menu_tasks":
+        bot.answer_callback_query(call.id)
+        text, markup = my_tasks_screen(uid)
+        edit_or_send(text, markup)
+    elif action == "goto_folders":
+        bot.answer_callback_query(call.id)
+        text, markup = folders_view(uid)
+        edit_or_send(text, markup)
+    elif action == "menu_calendar":
+        bot.answer_callback_query(call.id)
         now = _now_in_user_tz(uid)
         _send_or_edit_calendar(call, uid, now.year, now.month)
-    elif action == "events":
-        bot.answer_callback_query(call.id)
-        text, markup = upcoming_events_text(uid)
-        edit_or_send(text, markup or back_markup)
     elif action == "folders":
         bot.answer_callback_query(call.id)
         text, markup = folders_view(uid)
@@ -2324,23 +2721,23 @@ def analyze_user_text(uid, raw_text, kind="text", audio_seconds=0):
     if lang == "en":
         rules = """
 Classify each new item into exactly one provided category:
-- Calendar: events, appointments, calls, or tasks with a date/time.
-- Groceries: items the user needs to buy.
 - Urgent: explicitly urgent tasks due now/today.
-- Ideas: thoughts and ideas without an immediate action.
-- Inbox: other ordinary tasks.
-Do not put every item in Calendar. A date can be stored as an event only if the user gives a clear date/time.
+- Daily: routine everyday tasks (shopping, calls, errands).
+- Important: important but not urgent tasks.
+Do not put every item in one category. If the user mentions a date or time
+for a task (e.g. "call tomorrow at 10:00"), keep it as a task in the most
+fitting category AND also create a calendar event so it appears on the date.
 """
         response_language = "English"
     else:
         rules = """
 Распределяй каждую новую задачу ровно в одну из предоставленных категорий:
-- 📅 Календарь — встречи, звонки и события с датой или временем.
-- 🛒 Покупки — товары и продукты, которые нужно купить.
 - 🔴 Срочно — только явно срочные дела, которые нужно сделать сейчас или сегодня.
-- 💡 Идеи — мысли и идеи без конкретного ближайшего действия.
-- 📥 Входящие — остальные обычные дела.
-Не помещай все задачи в календарь. Событие создавай только при достаточно ясной дате или времени.
+- 📋 Повседневное — обычные повседневные задачи (покупки, звонки, поручения).
+- ⭐ Важно — важные, но не срочные задачи.
+Если пользователь упомянул дату или время задачи (например, «позвонить завтра в 10:00»),
+оставь это задачей в подходящей категории и дополнительно создай событие в календаре,
+чтобы оно отобразилось на нужной дате.
 """
         response_language = "Russian"
 
@@ -2354,6 +2751,10 @@ Open tasks: {json.dumps(open_tasks, ensure_ascii=False)}
 Extract:
 1. completed_task_ids: IDs of existing tasks the user clearly says they completed.
 2. new_tasks: short actionable items with exact category and text.
+   If the user gives a date/time for a task, also set "due_datetime" to the local
+   ISO datetime YYYY-MM-DDTHH:MM (else null). If the user asks to be reminded
+   BEFORE the task (e.g. "remind me 30 minutes before"), set "remind_minutes"
+   to that number of minutes (else null).
 3. new_events: events with title, local_datetime in ISO format YYYY-MM-DDTHH:MM,
    or null if the date/time is unclear.
    The title must NOT contain the date or the time — they are shown separately.
@@ -2368,7 +2769,7 @@ If date is relative (e.g. tomorrow), resolve it using the current date:
 JSON schema:
 {{
   "completed_task_ids": [],
-  "new_tasks": [{{"category": "exact category", "text": "task"}}],
+  "new_tasks": [{{"category": "exact category", "text": "task", "due_datetime": null, "remind_minutes": null}}],
   "new_events": [{{"title": "event", "local_datetime": "2026-05-18T15:30", "remind_minutes": null}}]
 }}
 """
@@ -2473,6 +2874,17 @@ def create_event(uid, title, local_datetime, timezone_name, reminders):
             conn.close()
 
 
+def _local_to_utc_iso(local_datetime, timezone_name):
+    """Локальная дата/время (YYYY-MM-DDTHH:MM) → ISO в UTC. None при ошибке."""
+    try:
+        naive = datetime.fromisoformat(local_datetime)
+        if naive.tzinfo is None:
+            naive = naive.replace(tzinfo=ZoneInfo(timezone_name))
+        return naive.astimezone(timezone.utc).isoformat(timespec="seconds")
+    except (ValueError, ZoneInfoNotFoundError):
+        return None
+
+
 def save_ai_result(uid, data, use_voice_limit=False):
     free, premium = get_user_data(uid)
     _paid, _bonus, _tts, _chat, _image, _show = get_balance(uid)
@@ -2481,6 +2893,7 @@ def save_ai_result(uid, data, use_voice_limit=False):
     inserted_events = 0
     completed = 0
     no_reminder_events = []  # [(event_id, title)] — созданы без напоминания
+    no_reminder_tasks = []   # [(text, want_minutes)] — напоминание недоступно без баланса
 
     timezone_name, _default_reminders, _voice = get_user_preferences(uid)
 
@@ -2506,9 +2919,35 @@ def save_ai_result(uid, data, use_voice_limit=False):
                 category = normalize_category(
                     str(item.get("category", "")), uid
                 )
+                due_utc = None
+                remind_before = None
+                remind_utc = None
+                due_raw = item.get("due_datetime")
+                if due_raw:
+                    due_utc = _local_to_utc_iso(str(due_raw), timezone_name)
+                # Напоминание к задаче — только при положительном балансе.
+                if due_utc:
+                    try:
+                        want = int(item.get("remind_minutes"))
+                    except (TypeError, ValueError):
+                        want = None
+                    if want and 1 <= want <= 7 * 1440:
+                        if has_paid_balance:
+                            remind_before = want
+                            due_dt = datetime.fromisoformat(due_utc)
+                            fire = due_dt - timedelta(minutes=want)
+                            if fire < datetime.now(timezone.utc):
+                                fire = datetime.now(timezone.utc)
+                            remind_utc = fire.isoformat(timespec="seconds")
+                        else:
+                            no_reminder_tasks.append((text, want))
                 conn.execute(
-                    "INSERT INTO tasks (user_id, category, task_text) VALUES (?, ?, ?)",
-                    (uid, category, text[:500]),
+                    """INSERT INTO tasks
+                       (user_id, category, task_text, due_utc, remind_before_min,
+                        remind_utc, remind_sent, timezone)
+                       VALUES (?, ?, ?, ?, ?, ?, 0, ?)""",
+                    (uid, category, text[:500], due_utc, remind_before,
+                     remind_utc, timezone_name),
                 )
                 inserted_tasks += 1
 
@@ -2560,7 +2999,13 @@ def save_ai_result(uid, data, use_voice_limit=False):
             finally:
                 conn.close()
 
-    return inserted_tasks, inserted_events, completed, no_reminder_events
+    return (
+        inserted_tasks,
+        inserted_events,
+        completed,
+        no_reminder_events,
+        no_reminder_tasks,
+    )
 
 
 # ============================================================
@@ -2662,6 +3107,18 @@ def send_reminder_picker(chat_id, uid, event_id, title):
     bot.send_message(chat_id, tr(uid, "remind_pick", title=title), reply_markup=markup)
 
 
+def send_task_reminder_upsell(chat_id, uid, no_reminder_tasks):
+    """Сообщить, что напоминания к задачам доступны при положительном балансе."""
+    if not no_reminder_tasks:
+        return
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"))
+    lines = [tr(uid, "task_reminder_need_balance")]
+    for text, want in no_reminder_tasks[:5]:
+        lines.append(tr(uid, "task_reminder_need_balance_item", task=text))
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=markup)
+
+
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     uid = message.from_user.id
@@ -2749,6 +3206,9 @@ def handle_voice(message):
         # События без напоминания — предлагаем выбрать время (кнопками/своё).
         for event_id, title in counts[3]:
             send_reminder_picker(message.chat.id, uid, event_id, title)
+
+        # Напоминания к задачам недоступны без положительного баланса.
+        send_task_reminder_upsell(message.chat.id, uid, counts[4])
 
     except Exception:
         logger.exception("Voice handling failed for user %s", uid)
@@ -2872,6 +3332,38 @@ def handle_plain_text(message):
         )
         return
 
+    # Ввод своего времени напоминания для конкретной задачи.
+    if isinstance(state, str) and state.startswith("task_reminder:"):
+        task_id = state.split(":", 1)[1]
+        minutes = parse_custom_reminder(text)
+        if minutes is None:
+            bot.reply_to(message, tr(uid, "remind_custom_bad"))
+            return
+        try:
+            task_id_int = int(task_id)
+        except (TypeError, ValueError):
+            user_states.pop(uid, None)
+            bot.reply_to(message, tr(uid, "api_error"))
+            return
+        paid, bonus, _tts, _chat, _img, _show = get_balance(uid)
+        if (paid + bonus) <= 0:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup")
+            )
+            user_states.pop(uid, None)
+            bot.reply_to(message, tr(uid, "task_remind_free_hint"), reply_markup=markup)
+            return
+        result = set_task_reminder(uid, task_id_int, minutes)
+        user_states.pop(uid, None)
+        if not result:
+            bot.reply_to(message, tr(uid, "task_need_due_for_reminder"))
+            return
+        bot.reply_to(
+            message, tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes]))
+        )
+        return
+
     # Ввод часового пояса.
     if user_states.get(uid) == "timezone":
         try:
@@ -2989,6 +3481,9 @@ def handle_plain_text(message):
         # События без напоминания — предлагаем выбрать время (кнопками/своё).
         for event_id, title in counts[3]:
             send_reminder_picker(message.chat.id, uid, event_id, title)
+
+        # Напоминания к задачам недоступны без положительного баланса.
+        send_task_reminder_upsell(message.chat.id, uid, counts[4])
 
     except Exception:
         logger.exception("Text handling failed for user %s", uid)

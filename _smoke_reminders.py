@@ -120,7 +120,7 @@ check("no paid balance", bot.has_paid_balance(free_uid) is False)
 future = (datetime.now(bot.ZoneInfo("Europe/Moscow")) + timedelta(days=5)).replace(tzinfo=None)
 data_free = {"new_events": [{"title": "Тест", "local_datetime": future.isoformat()}]}
 counts_free = bot.save_ai_result(free_uid, data_free, use_voice_limit=False)
-check("save_ai_result returns 4 values", len(counts_free) == 4)
+check("save_ai_result returns 5 values", len(counts_free) == 5)
 check("free event created without reminder", counts_free[1] == 1 and len(counts_free[3]) == 1)
 ev2_id, ev2_title = counts_free[3][0]
 check("picker carries event id/title", isinstance(ev2_id, int) and ev2_title == "Тест")
