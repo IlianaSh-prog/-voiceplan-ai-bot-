@@ -849,9 +849,52 @@ def init_db():
                 "CREATE INDEX IF NOT EXISTS idx_ai_requests_ts ON ai_requests(created_at)"
             )
             migrate_reminder_10_to_15(conn)
+            cleanup_legacy_folders(conn)
             conn.commit()
         finally:
             conn.close()
+
+
+def cleanup_legacy_folders(conn):
+    """Идемпотентная уборка устаревших пользовательских папок.
+
+    Папки «Учёба» и «Покупки» были созданы предыдущей версией бота. Пользователь
+    попросил их убрать (при необходимости создаст свои). Но задачи из этих и других
+    «осиротевших» категорий (чьи папки больше не существуют) нельзя терять — поэтому
+    переносим такие задачи в папку по умолчанию («📋 Повседневное» / «📋 Daily»),
+    соответствующую языку пользователя. Папки удаляем только по точному имени.
+    """
+    legacy_names = {"👩‍🎓 Учеба", "🛍 Покупки"}
+
+    # 1) Удаляем только две указанные устаревшие папки (по всем пользователям).
+    for name in legacy_names:
+        conn.execute(
+            "DELETE FROM custom_categories WHERE category_name = ?", (name,)
+        )
+
+    # 2) Переносим задачи из «несуществующих» категорий в папку по умолчанию,
+    #    чтобы они не пропали из интерфейса. Валидные категории = системные
+    #    папки языка пользователя + оставшиеся пользовательские папки.
+    users = conn.execute("SELECT user_id, language FROM users").fetchall()
+    for user in users:
+        uid = user["user_id"]
+        lang = user["language"] if user["language"] in SYSTEM_CATEGORIES else "ru"
+        valid = set(SYSTEM_CATEGORIES[lang])
+        custom = conn.execute(
+            "SELECT category_name FROM custom_categories WHERE user_id = ?", (uid,)
+        ).fetchall()
+        valid.update(row["category_name"] for row in custom)
+
+        default_folder = SYSTEM_CATEGORIES[lang][1]  # «📋 Повседневное» / «📋 Daily»
+        orphaned = conn.execute(
+            "SELECT DISTINCT category FROM tasks WHERE user_id = ?", (uid,)
+        ).fetchall()
+        for row in orphaned:
+            if row["category"] not in valid:
+                conn.execute(
+                    "UPDATE tasks SET category = ? WHERE user_id = ? AND category = ?",
+                    (default_folder, uid, row["category"]),
+                )
 
 
 def migrate_reminder_10_to_15(conn):
@@ -1620,7 +1663,7 @@ def folders_view(uid):
         types.InlineKeyboardButton(tr(uid, "nav_newcat"), callback_data="planner:newcat")
     )
     markup.add(
-        types.InlineKeyboardButton(tr(uid, "nav_back_menu"), callback_data="menu:main")
+        types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:menu_tasks")
     )
     return text, markup
 
