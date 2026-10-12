@@ -282,6 +282,14 @@ LANGS = {
         ),
         "free_usage": "Формат: /free 10 — начислить попытки себе.\nБез аргументов — показать остаток.",
         "free_added": "🎁 Начислено попыток: +{count}. Всего теперь: {free}.",
+        "setbal_usage": (
+            "Формат: /setbalance <сумма> [бонус]\n"
+            "Примеры: /setbalance 500 — платный баланс 500 ₽, бонус 0\n"
+            "/setbalance 0 — обнулить весь баланс\n"
+            "/setbalance 100 50 — платный 100 ₽, бонусный 50 ₽\n"
+            "Без аргументов — показать текущий баланс."
+        ),
+        "setbal_done": "✅ Баланс обновлён: платный {paid} ₽, бонусный {bonus} ₽.",
         "btn_chat": "💬 Чат с ИИ",
         "btn_image": "🎨 Картинки",
         "btn_video": "🎬 Видео",
@@ -343,8 +351,6 @@ LANGS = {
             "• Картинки: {images} из {images_max}\n"
             "• Пробные озвучки: {tts_free}\n\n"
             "Бесплатные возможности обновляются 1 раз в день.\n"
-            "Цены: чат {price_chat} ₽, картинка {price_image} ₽, "
-            "озвучка {price_tts} ₽/1000 знаков.\n"
             "Планировщик, задачи и календарь — бесплатно навсегда."
         ),
         "bal_topup": "💰 Пополнить баланс",
@@ -597,6 +603,14 @@ LANGS = {
         ),
         "free_usage": "Format: /free 10 — add attempts to yourself.\nWithout arguments — show balance.",
         "free_added": "🎁 Attempts added: +{count}. Balance: {free}.",
+        "setbal_usage": (
+            "Format: /setbalance <amount> [bonus]\n"
+            "Examples: /setbalance 500 — paid balance 500, bonus 0\n"
+            "/setbalance 0 — zero out the whole balance\n"
+            "/setbalance 100 50 — paid 100, bonus 50\n"
+            "Without arguments — show current balance."
+        ),
+        "setbal_done": "✅ Balance updated: paid {paid} RUB, bonus {bonus} RUB.",
         "btn_chat": "💬 AI Chat",
         "btn_image": "🎨 Images",
         "btn_video": "🎬 Video",
@@ -657,8 +671,6 @@ LANGS = {
             "• Images: {images} of {images_max}\n"
             "• Trial voice replies: {tts_free}\n\n"
             "Free features refresh once a day.\n"
-            "Prices: chat {price_chat} RUB, image {price_image} RUB, "
-            "voice {price_tts} RUB/1000 characters.\n"
             "Planner, tasks and calendar — free forever."
         ),
         "bal_topup": "💰 Top up balance",
@@ -4591,6 +4603,41 @@ def free_self_command(message):
 
     free, _premium = get_user_data(uid)
     bot.reply_to(message, tr(uid, "free_added", count=amount, free=free))
+
+
+@bot.message_handler(commands=["setbalance"])
+def admin_set_balance(message):
+    """Установить свой баланс для тестов (только админ).\n\n    /setbalance — показать; /setbalance 500 — платный 500, бонус 0;\n    /setbalance 0 — обнулить; /setbalance 100 50 — платный 100, бонус 50.\n    """
+    uid = message.from_user.id
+    if uid != ADMIN_ID:
+        bot.reply_to(message, tr(uid, "not_admin"))
+        return
+    parts = message.text.split()
+    if len(parts) == 1:
+        paid, bonus, _t, _c, _i, _s = get_balance(uid)
+        bot.reply_to(message, tr(uid, "setbal_done", paid=f"{paid:.2f}", bonus=f"{bonus:.2f}"))
+        return
+    try:
+        paid_new = float(parts[1].replace(",", "."))
+        bonus_new = float(parts[2].replace(",", ".")) if len(parts) >= 3 else 0.0
+    except (ValueError, IndexError):
+        bot.reply_to(message, tr(uid, "setbal_usage"))
+        return
+    if not (0 <= paid_new <= 1_000_000 and 0 <= bonus_new <= 1_000_000):
+        bot.reply_to(message, tr(uid, "setbal_usage"))
+        return
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            conn.execute(
+                "UPDATE users SET balance_paid=?, balance_bonus=? WHERE user_id=?",
+                (round(paid_new, 2), round(bonus_new, 2), uid),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    bot.reply_to(message, tr(uid, "setbal_done", paid=f"{paid_new:.2f}", bonus=f"{bonus_new:.2f}"))
 
 
 def _parse_report_dt(text_value, default_hm):
