@@ -346,11 +346,11 @@ LANGS = {
             "Всего: {total} ₽\n"
             "Платный: {paid} ₽\n"
             "Бонусный: {bonus} ₽\n\n"
-            "🆓 Бесплатно сегодня:\n"
+            "🆓 Бесплатно каждый день (обновляется 1 раз в день):\n"
             "• Чат: {chats} из {chats_max}\n"
-            "• Картинки: {images} из {images_max}\n"
-            "• Пробные озвучки: {tts_free}\n\n"
-            "Бесплатные возможности обновляются 1 раз в день.\n"
+            "• Картинки: {images} из {images_max}\n\n"
+            "🔊 Пробные озвучки: {tts_free} — выдаются один раз при первом "
+            "запуске и не обновляются.\n\n"
             "Планировщик, задачи и календарь — бесплатно навсегда."
         ),
         "bal_topup": "💰 Пополнить баланс",
@@ -666,11 +666,11 @@ LANGS = {
             "Total: {total} RUB\n"
             "Paid: {paid} RUB\n"
             "Bonus: {bonus} RUB\n\n"
-            "🆓 Free today:\n"
+            "🆓 Free every day (refresh once a day):\n"
             "• Chat: {chats} of {chats_max}\n"
-            "• Images: {images} of {images_max}\n"
-            "• Trial voice replies: {tts_free}\n\n"
-            "Free features refresh once a day.\n"
+            "• Images: {images} of {images_max}\n\n"
+            "🔊 Trial voice replies: {tts_free} — given once on first launch, "
+            "they do not refresh.\n\n"
             "Planner, tasks and calendar — free forever."
         ),
         "bal_topup": "💰 Top up balance",
