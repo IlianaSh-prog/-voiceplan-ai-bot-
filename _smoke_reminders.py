@@ -68,11 +68,16 @@ check("3 reminders scheduled", len(rem) == 3)
 
 local = now.astimezone(bot.ZoneInfo("Europe/Moscow"))
 cal_text, _markup = bot.build_calendar(UID, local.year, local.month)
-check("calendar has reminders line", "Напоминания:" in cal_text)
-check("calendar line lists all three", "15 минут" in cal_text and "1 час" in cal_text and "1 день" in cal_text)
+check("calendar marks planned day", "•" in cal_text)
 
 items = bot._events_by_local_date(UID).get(local.date(), [])
 check("day items carry 3 fire times", bool(items) and len(items[0][2]) == 3)
+check("day items carry offsets", bool(items) and sorted(items[0][5]) == [15, 60, 1440])
+# Подписи интервалов для карточки дня.
+check("day offset labels", all(
+    bot._offset_label(UID, m) in ("за 15 минут", "за 1 час", "за 1 день")
+    for m in items[0][5]
+))
 
 # 3. Пустой выбор.
 check("empty -> none selected", bot.format_reminder_labels(UID, []) == "не выбраны")

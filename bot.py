@@ -203,11 +203,83 @@ LANGS = {
         "unknown_timezone": "Не удалось распознать часовой пояс. Проверьте написание, например Europe/Moscow.",
         "confirm_event": "Событие сохранено.",
         "cal_title": "🗓 Календарь — {month}",
-        "cal_legend": "✳ — день, в котором есть события. Нажмите на дату внизу, чтобы посмотреть.",
+        "cal_legend": "• — дни с планами. Нажмите на дату, чтобы открыть её и добавить план.",
         "cal_no_dates": "В этом месяце событий нет.",
         "cal_day_title": "📅 {date}:",
-        "cal_day_empty": "📭 В этот день событий нет.",
         "cal_today": "📍 Сегодня",
+        "cal_legend_new": (
+            "🟢 — дни с планами.\n"
+            "📍 — выбранная дата.\n"
+            "Нажмите «Выбрать дату», затем наговорите или напишите событие или задачу."
+        ),
+        "cal_legend_trial": "🎁 Бесплатный календарь: осталось {days} дн.",
+        "cal_pick_date": "📍 Выбрать дату",
+        "cal_pick_date_prompt": (
+            "📍 На какую дату планируем?\n\n"
+            "Напишите дату в формате ДД.ММ.ГГГГ — например, 25.10.2026.\n"
+            "Или просто: «сегодня», «завтра», «послезавтра»."
+        ),
+        "cal_pick_date_bad": (
+            "Не удалось распознать дату. Примеры: 25.10.2026, завтра, сегодня, послезавтра."
+        ),
+        "cal_date_set": (
+            "✅ Дата выбрана: {date}\n\n"
+            "Теперь наговорите или напишите, что запланировано."
+        ),
+        "cal_add_hint": (
+            "✍️ Наговорите или напишите событие или задачу на {date}.\n\n"
+            "Можно сразу попросить напомнить — например, «встреча в 15:00, "
+            "напомни за час»."
+        ),
+        "cal_day_empty": (
+            "📭 В этот день пока ничего не запланировано.\n\n"
+            "Наговорите или напишите событие или задачу — и оно появится здесь."
+        ),
+        "cal_tap_day_hint": (
+            "👇 Нажмите на дату, чтобы открыть её и наговорить план."
+        ),
+        "cal_day_reminders_title": "⏰ Напомнить:",
+        "cal_day_add_reminder": "⏰ Поставить напоминание",
+        "cal_day_pick_format": (
+            "⏰ За сколько напомнить?\n\n"
+            "Нажмите кнопку с готовым вариантом или напишите свой текст, "
+            "например: «за 1 час», «за 30 минут», «за 2 дня»."
+        ),
+        "cal_day_locked": (
+            "🔒 Напоминания доступны при положительном балансе. "
+            "Пополните баланс, чтобы получать напоминания о планах."
+        ),
+        "cal_day_selected_for_add": (
+            "📅 Дата выбрана: {date}.\n\n"
+            "Теперь наговорите или напишите событие или задачу на эту дату. "
+            "Можно сразу попросить напомнить — например, «встреча в 15:00, "
+            "напомни за час»."
+        ),
+        "cal_access_needed": (
+            "🔒 Календарь с напоминаниями доступен при положительном балансе.\n\n"
+            "Первые 7 дней календарь работает бесплатно. Ваш пробный период "
+            "завершился — пополните баланс, чтобы продолжить планировать "
+            "и получать напоминания."
+        ),
+        "cal_trial_welcome": (
+            "🎁 Добро пожаловать в VoicePlan!\n\n"
+            "Мы дарим вам неделю бесплатного доступа к календарю и напоминаниям — "
+            "целых 7 дней, начиная с сегодняшнего дня.\n\n"
+            "За это время вы сможете:\n"
+            "• создавать события и задачи на любую дату;\n"
+            "• получать напоминания заранее — за 15 минут, час, день или в свой срок;\n"
+            "• планировать голосом или текстом прямо в чате.\n\n"
+            "По истечении 7 дней календарь и напоминания остаются доступны при "
+            "положительном балансе. Приятного планирования!"
+        ),
+        "cal_reminder_free_hint": (
+            "⏰ Напоминания к событиям подключаются при положительном балансе."
+        ),
+        "cal_reminder_added": "✅ Напоминание добавлено: {value}.",
+        "cal_reminder_below": (
+            "Нажмите «Напомнить», чтобы задать, за сколько предупредить "
+            "(например, за 15 минут или за 1 час)."
+        ),
         "free_usage": "Формат: /free 10 — начислить попытки себе.\nБез аргументов — показать остаток.",
         "free_added": "🎁 Начислено попыток: +{count}. Всего теперь: {free}.",
         "btn_chat": "💬 Чат с ИИ",
@@ -450,8 +522,79 @@ LANGS = {
         "cal_legend": "✳ — a day with events. Tap a date below to view them.",
         "cal_no_dates": "No events this month.",
         "cal_day_title": "📅 {date}:",
-        "cal_day_empty": "📭 No events on this day.",
         "cal_today": "📍 Today",
+        "cal_legend_new": (
+            "🟢 — days with plans.\n"
+            "📍 — the selected date.\n"
+            "Tap “Choose a date”, then say or type an event or task."
+        ),
+        "cal_legend_trial": "🎁 Free calendar: {days} days left.",
+        "cal_pick_date": "📍 Choose a date",
+        "cal_pick_date_prompt": (
+            "📍 Which date are we planning?\n\n"
+            "Type the date as DD.MM.YYYY — for example, 25.10.2026.\n"
+            "Or simply: “today”, “tomorrow”, “day after tomorrow”."
+        ),
+        "cal_pick_date_bad": (
+            "Couldn’t recognize the date. Examples: 25.10.2026, tomorrow, today, day after tomorrow."
+        ),
+        "cal_date_set": (
+            "✅ Date selected: {date}\n\n"
+            "Now say or type what you’re planning."
+        ),
+        "cal_add_hint": (
+            "✍️ Say or type an event or task for {date}.\n\n"
+            "You can ask for a reminder right away — e.g. “meeting at 15:00, "
+            "remind me 1 hour before”."
+        ),
+        "cal_day_empty": (
+            "📭 Nothing is planned for this day yet.\n\n"
+            "Say or type an event or task — and it will appear here."
+        ),
+        "cal_tap_day_hint": (
+            "👇 Tap a date to open it and add a plan."
+        ),
+        "cal_day_reminders_title": "⏰ Reminders:",
+        "cal_day_add_reminder": "⏰ Set a reminder",
+        "cal_day_pick_format": (
+            "⏰ How long before to remind you?\n\n"
+            "Tap a ready-made option or type your own text, "
+            "for example: “1 hour before”, “30 minutes before”, “2 days before”."
+        ),
+        "cal_day_locked": (
+            "🔒 Reminders are available with a positive balance. "
+            "Top up your balance to get reminders about your plans."
+        ),
+        "cal_day_selected_for_add": (
+            "📅 Date selected: {date}.\n\n"
+            "Now say or type an event or task for this date. "
+            "You can ask for a reminder right away — e.g. “meeting at 15:00, "
+            "remind me 1 hour before”."
+        ),
+        "cal_access_needed": (
+            "🔒 The calendar with reminders is available with a positive balance.\n\n"
+            "The first 7 days the calendar is free. Your trial period has ended — "
+            "top up your balance to keep planning and receiving reminders."
+        ),
+        "cal_trial_welcome": (
+            "🎁 Welcome to VoicePlan!\n\n"
+            "We’re giving you a week of free access to the calendar and reminders — "
+            "a full 7 days, starting today.\n\n"
+            "During this time you can:\n"
+            "• create events and tasks for any date;\n"
+            "• get reminders ahead of time — 15 minutes, an hour, a day before, or your own time;\n"
+            "• plan by voice or text right in the chat.\n\n"
+            "After the 7 days the calendar and reminders remain available with a "
+            "positive balance. Happy planning!"
+        ),
+        "cal_reminder_free_hint": (
+            "⏰ Event reminders are enabled with a positive balance."
+        ),
+        "cal_reminder_added": "✅ Reminder added: {value}.",
+        "cal_reminder_below": (
+            "Tap “Remind” to set how far in advance to be notified "
+            "(e.g. 15 minutes or 1 hour before)."
+        ),
         "free_usage": "Format: /free 10 — add attempts to yourself.\nWithout arguments — show balance.",
         "free_added": "🎁 Attempts added: +{count}. Balance: {free}.",
         "btn_chat": "💬 AI Chat",
@@ -736,6 +879,12 @@ def init_db():
                 # локальный перезапуск). Временные состояния (категория, часовой пояс,
                 # своё время напоминания) по-прежнему живут в user_states.
                 "ui_mode": "TEXT DEFAULT ''",
+                # 7-дневный бесплатный доступ к календарю для новых пользователей:
+                # trial_started_at фиксирует момент старта триала (однократно),
+                # calendar_free_ack — чтобы приветственное сообщение о триале
+                # показывалось только один раз.
+                "trial_started_at": "TEXT",
+                "calendar_free_ack": "INTEGER DEFAULT 0",
             }
             for column, definition in migrations.items():
                 if column not in cols:
@@ -1224,6 +1373,167 @@ def has_paid_balance(uid):
     return round(float(paid) + float(bonus), 2) > 0
 
 
+TRIAL_DAYS = 7
+
+
+def start_calendar_trial(uid):
+    """Однократно фиксирует старт 7-дневного бесплатного доступа к календарю.
+
+    Вызывается при регистрации. Возвращает True, если триал только что стартовал
+    (чтобы показать приветственное сообщение ровно один раз).
+    """
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            row = conn.execute(
+                "SELECT trial_started_at FROM users WHERE user_id = ?", (uid,)
+            ).fetchone()
+            if row and not row["trial_started_at"]:
+                conn.execute(
+                    "UPDATE users SET trial_started_at=? WHERE user_id=?",
+                    (datetime.now(timezone.utc).isoformat(timespec="seconds"), uid),
+                )
+                conn.commit()
+                return True
+            return False
+        finally:
+            conn.close()
+
+
+def calendar_trial_days_left(uid):
+    """Сколько дней бесплатного триала осталось (0 — триал закончился/не начат)."""
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT trial_started_at FROM users WHERE user_id = ?", (uid,)
+            ).fetchone()
+        finally:
+            conn.close()
+    if not row or not row["trial_started_at"]:
+        return 0
+    try:
+        started = datetime.fromisoformat(row["trial_started_at"])
+    except (ValueError, TypeError):
+        return 0
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds() / 86400
+    left = TRIAL_DAYS - elapsed
+    return max(0, int(left) if left > 0 else 0)
+
+
+def calendar_access(uid):
+    """Доступ к календарю: (доступен?, причина).
+
+    Календарь работает при положительном балансе. Новым пользователям даётся
+    неделя (7 дней) бесплатно — доступ есть либо при балансе, либо во время триала.
+    Причина: 'paid' | 'trial' | 'expired'.
+    """
+    if has_paid_balance(uid):
+        return True, "paid"
+    days_left = calendar_trial_days_left(uid)
+    if days_left > 0:
+        return True, "trial"
+    return False, "expired"
+
+
+def _calendar_locked(chat_id, uid):
+    """Календарь закрыт: триал закончился и баланса нет."""
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"))
+    bot.send_message(chat_id, tr(uid, "cal_access_needed"), reply_markup=markup)
+
+
+# Выбранная пользователем дата календаря (в памяти процесса): {uid: date}.
+# Нужна, чтобы следующее наговоренное/написанное сообщение попало на эту дату.
+selected_cal_date = {}
+
+
+def _maybe_show_trial_welcome(chat_id, uid):
+    """Показать приветствие о 7 бесплатных днях ровно один раз (флаг в БД).
+
+    Возвращает True, если сообщение было отправлено.
+    """
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            row = conn.execute(
+                "SELECT calendar_free_ack FROM users WHERE user_id = ?", (uid,)
+            ).fetchone()
+            if row is not None and row["calendar_free_ack"]:
+                return False
+            conn.execute(
+                "UPDATE users SET calendar_free_ack=1 WHERE user_id=?", (uid,)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    try:
+        bot.send_message(chat_id, tr(uid, "cal_trial_welcome"))
+    except Exception:
+        logger.exception("Не удалось отправить приветствие о бесплатном календаре")
+    return True
+
+
+def parse_user_date(text):
+    """Разбор даты из текста → date или None.
+
+    Понимает: ДД.ММ.ГГГГ, ДД.ММ, ГГГГ-ММ-ДД, «сегодня», «завтра», «послезавтра».
+    """
+    import re
+
+    raw = (text or "").strip().lower().replace("ё", "е")
+    if not raw:
+        return None
+    # Относительные даты.
+    if raw in {"сегодня", "today"}:
+        return date.today()
+    if raw in {"завтра", "tomorrow"}:
+        return date.today() + timedelta(days=1)
+    if raw in {"послезавтра", "после завтра", "day after tomorrow"}:
+        return date.today() + timedelta(days=2)
+
+    match = re.fullmatch(r"(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})", raw)
+    if match:
+        day, month, year = (int(x) for x in match.groups())
+        if year < 100:
+            year += 2000
+        try:
+            return date(year, month, day)
+        except ValueError:
+            return None
+
+    match = re.fullmatch(r"(\d{1,2})[.\-/](\d{1,2})", raw)
+    if match:
+        day, month = (int(x) for x in match.groups())
+        year = date.today().year
+        try:
+            return date(year, month, day)
+        except ValueError:
+            return None
+
+    match = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", raw)
+    if match:
+        year, month, day = (int(x) for x in match.groups())
+        try:
+            return date(year, month, day)
+        except ValueError:
+            return None
+
+    return None
+
+
+def _now_in_user_tz_local(uid):
+    tz_name, _off, _voice = get_user_preferences(uid)
+    try:
+        return datetime.now(ZoneInfo(tz_name))
+    except ZoneInfoNotFoundError:
+        return datetime.now(timezone.utc)
+
+
 def maybe_receipt(uid, amount, what_key):
     """Квитанция о списании — если пользователь не выключил «Показывать списания»."""
     paid, bonus, _tts, _chat, _img, show = get_balance(uid)
@@ -1307,6 +1617,9 @@ def register_user(message):
         finally:
             conn.close()
 
+    # Новому пользователю запускаем 7-дневный бесплатный доступ к календарю.
+    trial_started = start_calendar_trial(uid) if is_new else False
+
     if is_new and ADMIN_ID:
         try:
             bot.send_message(
@@ -1316,6 +1629,8 @@ def register_user(message):
             )
         except Exception:
             logger.exception("Не удалось уведомить администратора о регистрации")
+
+    return trial_started
 
 
 def log_activity(uid):
@@ -1468,7 +1783,7 @@ def language_keyboard():
 
 @bot.message_handler(commands=["start"])
 def handle_start(message):
-    register_user(message)
+    trial_started = register_user(message)
     leave_mode(message.from_user.id)
 
     # Первый контакт: показываем публичную оферту, пока она не принята.
@@ -1489,6 +1804,10 @@ def handle_start(message):
         ),
         reply_markup=main_keyboard(message.from_user.id),
     )
+
+    # Приветственное сообщение о 7 бесплатных днях календаря — ровно один раз.
+    if trial_started and _maybe_show_trial_welcome(message.chat.id, message.from_user.id):
+        pass
 
 
 @bot.message_handler(commands=["help"])
@@ -2302,6 +2621,31 @@ def format_reminder_labels(uid, offsets):
     return text or tr(uid, "reminders_none")
 
 
+def _offset_label(uid, minutes):
+    """Подпись одного интервала: «за 15 минут» / «за 1 час» и т.п."""
+    labels = REMINDER_LABELS[get_user_lang(uid)]
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return f"{minutes} мин"
+    return labels.get(str(minutes), f"{minutes} мин")
+
+
+def _apply_force_date(local_str, force_date):
+    """Подставить выбранную в календаре дату, сохранив время (или 09:00).
+
+    local_str может быть 'YYYY-MM-DDTHH:MM', 'HH:MM' или пустым.
+    """
+    import re
+
+    time_part = "09:00"
+    if local_str:
+        match = re.search(r"(\d{1,2}):(\d{2})", str(local_str))
+        if match:
+            time_part = f"{int(match.group(1)):02d}:{match.group(2)}"
+    return f"{force_date.isoformat()}T{time_part}"
+
+
 def parse_custom_reminder(text):
     """Разбор произвольного времени напоминания из текста → минуты (int) или None.
 
@@ -2421,20 +2765,29 @@ def clear_task_reminder(uid, task_id):
 
 
 def _events_by_local_date(uid):
-    """Словарь {локальная дата: [(название, 'HH:MM', [datetime срабатываний]), ...]}."""
+    """Словарь {локальная дата: [(название, 'HH:MM', [datetime срабатываний], kind, id, [минуты]), ...]}.
+
+    Объединяет события (events) и задачи с датой (tasks.due_utc), чтобы на
+    календаре подсвечивался любой план дня. kind: 'event' | 'task'.
+    """
     user_tz_name, _off, _voice = get_user_preferences(uid)
+    result = {}
     with db_lock:
         conn = get_db()
         try:
             rows = conn.execute(
-                "SELECT title, start_utc, timezone, reminders_json FROM events "
+                "SELECT event_id, title, start_utc, timezone, reminders_json FROM events "
                 "WHERE user_id = ? AND cancelled = 0",
+                (uid,),
+            ).fetchall()
+            task_rows = conn.execute(
+                "SELECT task_id, task_text, due_utc, timezone, remind_before_min "
+                "FROM tasks WHERE user_id = ? AND due_utc IS NOT NULL",
                 (uid,),
             ).fetchall()
         finally:
             conn.close()
 
-    result = {}
     for row in rows:
         try:
             tz = ZoneInfo(row["timezone"] or user_tz_name)
@@ -2447,7 +2800,25 @@ def _events_by_local_date(uid):
             offsets = []
         fire_times = [local - timedelta(minutes=m) for m in offsets]
         result.setdefault(local.date(), []).append(
-            (row["title"], local.strftime("%H:%M"), fire_times)
+            (row["title"], local.strftime("%H:%M"), fire_times, "event", row["event_id"], offsets)
+        )
+
+    for row in task_rows:
+        try:
+            due = datetime.fromisoformat(row["due_utc"])
+            if due.tzinfo is None:
+                tz = ZoneInfo(row["timezone"] or user_tz_name)
+                due = due.replace(tzinfo=tz).astimezone(timezone.utc)
+            local = due.astimezone(ZoneInfo(row["timezone"] or user_tz_name))
+        except (ValueError, ZoneInfoNotFoundError):
+            continue
+        fire_times = []
+        task_offsets = []
+        if row["remind_before_min"]:
+            task_offsets = [int(row["remind_before_min"])]
+            fire_times.append(local - timedelta(minutes=int(row["remind_before_min"])))
+        result.setdefault(local.date(), []).append(
+            (row["task_text"], local.strftime("%H:%M"), fire_times, "task", row["task_id"], task_offsets)
         )
 
     for items in result.values():
@@ -2464,11 +2835,17 @@ def _now_in_user_tz(uid):
 
 
 def build_calendar(uid, year, month):
-    """Текст месяца + кнопки: навигация и дни со событиями (дни отмечены '*')."""
+    """Календарь месяца: кликабельная сетка дней, подсветка дней с планами.
+
+    Дни с событиями/задачами отмечаются • и выделены, любой день — кнопка
+    (можно наговорить план на выбранную дату). Плюс навигация по месяцам/годам,
+    «Сегодня» и статус пробного периода календаря.
+    """
     lang = get_user_lang(uid)
     events = _events_by_local_date(uid)
     month_name = MONTHS[lang][month - 1]
     weeks = calmod.Calendar(firstweekday=0).monthdayscalendar(year, month)
+    today_local = _now_in_user_tz(uid).date()
 
     lines = [tr(uid, "cal_title", month=f"{month_name} {year}"), ""]
     lines.append(WEEKDAYS_HEADER[lang])
@@ -2476,47 +2853,63 @@ def build_calendar(uid, year, month):
         cells = []
         for day in week:
             if day == 0:
-                cells.append("    ")
+                cells.append("   ")
             else:
-                marker = "*" if date(year, month, day) in events else " "
-                cells.append(f"{day:>3}{marker}")
-        lines.append("".join(cells).rstrip())
-    lines.append("")
+                mark = "•" if date(year, month, day) in events else " "
+                cells.append(f"{day:>2}{mark}")
+        lines.append(" ".join(cells).rstrip())
 
+    # Легенда: дни с планами в этом месяце.
     days_with = sorted(d for d in events if d.year == year and d.month == month)
+    lines.append("")
     if days_with:
-        lines.append(tr(uid, "cal_legend"))
-        lines.append(", ".join(str(d.day) for d in days_with))
+        lines.append(
+            tr(uid, "cal_legend") + " " + ", ".join(str(d.day) for d in days_with)
+        )
     else:
         lines.append(tr(uid, "cal_no_dates"))
 
-    # Строка с выбранными интервалами напоминаний (все выбранные видны сразу).
-    _tz, selected_offsets, _voice = get_user_preferences(uid)
+    # Подсказка: как добавить план на выбранный день.
     lines.append("")
-    lines.append(tr(uid, "reminders", value=format_reminder_labels(uid, selected_offsets)))
+    lines.append(tr(uid, "cal_tap_day_hint"))
+
+    # Статус доступа к календарю (пробный период / активен / нужна оплата).
+    access_ok, access_reason = calendar_access(uid)
+    if access_ok and access_reason == "trial":
+        lines.append("")
+        lines.append(tr(uid, "cal_legend_trial", days=calendar_trial_days_left(uid)))
 
     markup = types.InlineKeyboardMarkup(row_width=7)
+    # Навигация: ◀︎ год, ◀︎ месяц, Сегодня, месяц ▶︎, год ▶︎.
     prev_y, prev_m = (year - 1, 12) if month == 1 else (year, month - 1)
     next_y, next_m = (year + 1, 1) if month == 12 else (year, month + 1)
     markup.row(
+        types.InlineKeyboardButton("⇤", callback_data=f"calnav:{year - 1:04d}-{month:02d}"),
         types.InlineKeyboardButton("⬅️", callback_data=f"calnav:{prev_y:04d}-{prev_m:02d}"),
         types.InlineKeyboardButton(tr(uid, "cal_today"), callback_data="caltoday"),
         types.InlineKeyboardButton("➡️", callback_data=f"calnav:{next_y:04d}-{next_m:02d}"),
+        types.InlineKeyboardButton("⇥", callback_data=f"calnav:{year + 1:04d}-{month:02d}"),
     )
-    row_buttons = []
-    for d in days_with:
-        row_buttons.append(
-            types.InlineKeyboardButton(str(d.day), callback_data=f"calday:{d.isoformat()}")
-        )
-        if len(row_buttons) == 7:
-            markup.row(*row_buttons)
-            row_buttons = []
-    if row_buttons:
+    # Сетка дней: каждый день — кнопка, дни с планами подсвечены «•».
+    for week in weeks:
+        row_buttons = []
+        for day in week:
+            if day == 0:
+                row_buttons.append(
+                    types.InlineKeyboardButton(" ", callback_data="calnoop")
+                )
+            else:
+                has = date(year, month, day) in events
+                label = f"•{day}•" if has else str(day)
+                row_buttons.append(
+                    types.InlineKeyboardButton(
+                        label, callback_data=f"calday:{date(year, month, day).isoformat()}"
+                    )
+                )
         markup.row(*row_buttons)
 
-    # Интервалы напоминаний перенесены сюда из «Настроек» + возврат к задачам.
+    # Возврат к задачам.
     markup.row(
-        types.InlineKeyboardButton(tr(uid, "nav_reminders"), callback_data="setting:reminders"),
         types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:tasks"),
     )
 
@@ -2543,8 +2936,13 @@ def _send_or_edit_calendar(target, uid, year, month):
 
 @bot.message_handler(commands=["calendar"])
 def calendar_command(message):
-    now = _now_in_user_tz(message.from_user.id)
-    _send_or_edit_calendar(message, message.from_user.id, now.year, now.month)
+    uid = message.from_user.id
+    access_ok, _reason = calendar_access(uid)
+    if not access_ok:
+        _calendar_locked(message.chat.id, uid)
+        return
+    now = _now_in_user_tz(uid)
+    _send_or_edit_calendar(message, uid, now.year, now.month)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("calnav:"))
@@ -2577,16 +2975,37 @@ def calendar_open_day(call):
         bot.answer_callback_query(call.id, "Invalid date")
         return
 
+    # Запоминаем выбранную дату: следующее наговоренное/написанное
+    # сообщение попадёт на этот день.
+    selected_cal_date[uid] = day
+
+    access_ok, _reason = calendar_access(uid)
     items = _events_by_local_date(uid).get(day, [])
-    if items:
-        lines = [tr(uid, "cal_day_title", date=day.strftime("%d.%m.%Y"))]
-        for title, time_hhmm, fire_times in items:
-            lines.append(f"• {title} — {time_hhmm}")
+
+    lines = [tr(uid, "cal_day_title", date=day.strftime("%d.%m.%Y"))]
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for title, time_hhmm, fire_times, kind, item_id, offsets in items:
+        lines.append(f"• {title} — {time_hhmm}")
+        if offsets:
+            # Несколько напоминаний — каждое на своей строке с будильником.
+            for minutes in sorted({int(x) for x in offsets}):
+                lines.append(f"   ⏰ {_offset_label(uid, minutes)}")
+        elif access_ok:
+            # Напоминания нет — предлагаем поставить.
+            markup.add(
+                types.InlineKeyboardButton(
+                    tr(uid, "cal_day_add_reminder"),
+                    callback_data=f"calrem:{kind}:{item_id}",
+                )
+            )
+
+    if not items:
+        lines.append(tr(uid, "cal_day_empty"))
     else:
-        lines = [tr(uid, "cal_day_empty")]
+        lines.append(tr(uid, "cal_reminder_below"))
 
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "\n".join(lines))
+    bot.send_message(call.message.chat.id, "\n".join(lines), reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "calnoop")
@@ -2809,6 +3228,99 @@ def event_reminder_skip(call):
         bot.send_message(call.message.chat.id, tr(uid, "remind_skipped"))
 
 
+def _set_plan_reminder(uid, kind, item_id, minutes):
+    """Установить напоминание событию/задаче. True при успехе."""
+    try:
+        item_id = int(item_id)
+    except (TypeError, ValueError):
+        return False
+    if kind == "event":
+        return bool(set_event_reminder(uid, item_id, minutes))
+    if kind == "task":
+        return bool(set_task_reminder(uid, item_id, minutes))
+    return False
+
+
+def _send_calendar_reminder_picker(chat_id, uid, kind, item_id):
+    """Кнопки выбора времени напоминания из карточки дня календаря."""
+    short = REMINDER_SHORT.get(get_user_lang(uid), REMINDER_SHORT["ru"])
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for key in REMINDER_QUICK:
+        markup.add(
+            types.InlineKeyboardButton(
+                short[key], callback_data=f"calremq:{kind}:{item_id}:{key}"
+            )
+        )
+    markup.row(
+        types.InlineKeyboardButton(
+            tr(uid, "remind_custom_btn"), callback_data=f"calremc:{kind}:{item_id}"
+        )
+    )
+    bot.send_message(chat_id, tr(uid, "cal_day_pick_format"), reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("calrem:"))
+def calendar_add_reminder(call):
+    """Кнопка «⏰ Поставить напоминание» в карточке дня календаря."""
+    uid = call.from_user.id
+    parts = call.data.split(":")
+    if len(parts) != 3 or parts[1] not in ("event", "task"):
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+    _, kind, item_id = parts
+    access_ok, _reason = calendar_access(uid)
+    if not access_ok:
+        bot.answer_callback_query(call.id)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"))
+        bot.send_message(call.message.chat.id, tr(uid, "cal_reminder_free_hint"), reply_markup=markup)
+        return
+    bot.answer_callback_query(call.id)
+    _send_calendar_reminder_picker(call.message.chat.id, uid, kind, item_id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("calremq:"))
+def calendar_reminder_quick(call):
+    """Быстрый выбор времени напоминания из календаря."""
+    uid = call.from_user.id
+    parts = call.data.split(":")
+    if len(parts) != 4:
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+    _, kind, item_id, value = parts
+    try:
+        minutes = int(value)
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid interval")
+        return
+    access_ok, _reason = calendar_access(uid)
+    if not access_ok:
+        bot.answer_callback_query(call.id)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"))
+        bot.send_message(call.message.chat.id, tr(uid, "cal_reminder_free_hint"), reply_markup=markup)
+        return
+    if not _set_plan_reminder(uid, kind, item_id, minutes):
+        bot.answer_callback_query(call.id, "Plan not found")
+        return
+    bot.answer_callback_query(call.id, "✅")
+    bot.send_message(call.message.chat.id, tr(uid, "cal_reminder_added", value=_offset_label(uid, minutes)))
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("calremc:"))
+def calendar_reminder_custom(call):
+    """Своё время напоминания (голосом/текстом) из карточки дня календаря."""
+    uid = call.from_user.id
+    parts = call.data.split(":")
+    if len(parts) != 3 or parts[1] not in ("event", "task"):
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+    _, kind, item_id = parts
+    begin_input(uid, f"calrem:{kind}:{item_id}")
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, tr(uid, "cal_day_pick_format"))
+
+
 # ============================================================
 # 6-bis. РАЗДЕЛ «ЗАДАЧИ И КАЛЕНДАРЬ»: CALLBACK-НАВИГАЦИЯ
 # ============================================================
@@ -2842,7 +3354,12 @@ def planner_router(call):
         bot.answer_callback_query(call.id)
         text, markup = folders_view(uid)
         edit_or_send(text, markup)
-    elif action == "menu_calendar":
+    elif action in {"menu_calendar", "calendar"}:
+        access_ok, _reason = calendar_access(uid)
+        if not access_ok:
+            bot.answer_callback_query(call.id)
+            _calendar_locked(call.message.chat.id, uid)
+            return
         bot.answer_callback_query(call.id)
         now = _now_in_user_tz(uid)
         _send_or_edit_calendar(call, uid, now.year, now.month)
@@ -3085,7 +3602,7 @@ def _local_to_utc_iso(local_datetime, timezone_name):
         return None
 
 
-def save_ai_result(uid, data, use_voice_limit=False):
+def save_ai_result(uid, data, use_voice_limit=False, force_date=None):
     free, premium = get_user_data(uid)
     _paid, _bonus, _tts, _chat, _image, _show = get_balance(uid)
     has_paid_balance = (_paid + _bonus) > 0
@@ -3123,6 +3640,8 @@ def save_ai_result(uid, data, use_voice_limit=False):
                 remind_before = None
                 remind_utc = None
                 due_raw = item.get("due_datetime")
+                if force_date and not due_raw:
+                    due_raw = _apply_force_date(None, force_date)
                 if due_raw:
                     due_utc = _local_to_utc_iso(str(due_raw), timezone_name)
                 # Напоминание к задаче — только при положительном балансе.
@@ -3163,6 +3682,8 @@ def save_ai_result(uid, data, use_voice_limit=False):
             continue
         title = str(item.get("title", "")).strip()
         local_datetime = item.get("local_datetime")
+        if force_date:
+            local_datetime = _apply_force_date(local_datetime, force_date)
         if not title or not local_datetime:
             continue
 
@@ -3326,6 +3847,42 @@ def handle_voice(message):
         return
     log_activity(uid)
 
+    # Своё время напоминания голосом (из карточки дня календаря).
+    _vstate = user_states.get(uid)
+    if isinstance(_vstate, str) and _vstate.startswith("calrem:"):
+        status = bot.reply_to(message, tr(uid, "processing"))
+        path = os.path.join(tempfile.gettempdir(), f"voiceplan_{uid}_{message.message_id}.ogg")
+        try:
+            file_info = bot.get_file(message.voice.file_id)
+            audio = bot.download_file(file_info.file_path)
+            with open(path, "wb") as output:
+                output.write(audio)
+            transcript = transcribe_voice(path)
+            minutes = parse_custom_reminder(transcript)
+            if minutes is None:
+                bot.reply_to(message, tr(uid, "remind_custom_bad"))
+                return
+            access_ok, _reason = calendar_access(uid)
+            if not access_ok:
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"))
+                user_states.pop(uid, None)
+                bot.reply_to(message, tr(uid, "cal_reminder_free_hint"), reply_markup=markup)
+                return
+            _, kind, item_id = _vstate.split(":", 2)
+            user_states.pop(uid, None)
+            if not _set_plan_reminder(uid, kind, item_id, minutes):
+                bot.reply_to(message, tr(uid, "api_error"))
+                return
+            bot.reply_to(message, tr(uid, "cal_reminder_added", value=_offset_label(uid, minutes)))
+        except Exception:
+            logger.exception("Voice calendar reminder failed for user %s", uid)
+            bot.send_message(message.chat.id, tr(uid, "api_error"))
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+        return
+
     # В режиме «Чат с ИИ» голос — это вопрос нейросети, а не задача.
     # Распознаём речь и отдаём её в общий обработчик чата (ответ текстом).
     if ui_mode(uid) == "chat":
@@ -3386,7 +3943,8 @@ def handle_voice(message):
             kind="voice",
             audio_seconds=getattr(message.voice, "duration", 0) or 0,
         )
-        counts = save_ai_result(uid, result, use_voice_limit=True)
+        force_date = selected_cal_date.pop(uid, None)
+        counts = save_ai_result(uid, result, use_voice_limit=True, force_date=force_date)
 
         try:
             bot.delete_message(message.chat.id, status.message_id)
@@ -3564,6 +4122,27 @@ def handle_plain_text(message):
         )
         return
 
+    # Своё время напоминания для события/задачи из календаря.
+    if isinstance(state, str) and state.startswith("calrem:"):
+        _, kind, item_id = state.split(":", 2)
+        minutes = parse_custom_reminder(text)
+        if minutes is None:
+            bot.reply_to(message, tr(uid, "remind_custom_bad"))
+            return
+        access_ok, _reason = calendar_access(uid)
+        if not access_ok:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"))
+            user_states.pop(uid, None)
+            bot.reply_to(message, tr(uid, "cal_reminder_free_hint"), reply_markup=markup)
+            return
+        user_states.pop(uid, None)
+        if not _set_plan_reminder(uid, kind, item_id, minutes):
+            bot.reply_to(message, tr(uid, "api_error"))
+            return
+        bot.reply_to(message, tr(uid, "cal_reminder_added", value=_offset_label(uid, minutes)))
+        return
+
     # Ввод часового пояса.
     if user_states.get(uid) == "timezone":
         try:
@@ -3664,7 +4243,8 @@ def handle_plain_text(message):
     status = bot.reply_to(message, tr(uid, "processing"))
     try:
         result = analyze_user_text(uid, text)
-        counts = save_ai_result(uid, result, use_voice_limit=False)
+        force_date = selected_cal_date.pop(uid, None)
+        counts = save_ai_result(uid, result, use_voice_limit=False, force_date=force_date)
         try:
             bot.delete_message(message.chat.id, status.message_id)
         except Exception:
