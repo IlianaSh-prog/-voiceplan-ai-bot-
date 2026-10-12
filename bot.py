@@ -10,6 +10,7 @@ import sqlite3
 import logging
 import socket
 import threading
+import html
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -18,6 +19,11 @@ import requests
 import telebot
 from telebot import types
 from telebot.apihelper import ApiTelegramException
+
+
+def _esc(value):
+    """Экранирование пользовательского текста для HTML parse_mode."""
+    return html.escape(str(value), quote=False)
 
 
 # ============================================================
@@ -359,6 +365,11 @@ LANGS = {
         "task_card_reminder_off": "⏰ Напоминание не установлено",
         "task_done_btn": "✅ Сделано",
         "task_undone_btn": "↩️ Вернуть",
+        "task_delete_btn": "🗑 Удалить",
+        "task_delete_confirm_title": "🗑 Удалить задачу?",
+        "task_delete_confirm_body": "«{title}» будет удалена безвозвратно. Точно удалить?",
+        "task_delete_yes": "✅ Да, удалить",
+        "task_delete_no": "↩️ Отмена",
         "task_remind_btn": "⏰ Напомнить",
         "task_remind_free_hint": (
             "⏰ Напоминание к задаче доступно при положительном балансе. "
@@ -588,6 +599,11 @@ LANGS = {
         "task_card_reminder_off": "⏰ No reminder set",
         "task_done_btn": "✅ Done",
         "task_undone_btn": "↩️ Undo",
+        "task_delete_btn": "🗑 Delete",
+        "task_delete_confirm_title": "🗑 Delete task?",
+        "task_delete_confirm_body": "“{title}” will be deleted permanently. Delete it?",
+        "task_delete_yes": "✅ Yes, delete",
+        "task_delete_no": "↩️ Cancel",
         "task_remind_btn": "⏰ Remind",
         "task_remind_free_hint": (
             "⏰ Task reminders are available with a positive balance. "
@@ -1786,14 +1802,15 @@ def folder_tasks_text(uid, category):
         finally:
             conn.close()
 
-    lines = [f"📁 {category}"]
+    lines = [f"📁 {_esc(category)}"]
     if not rows:
         lines.append(tr(uid, "folders_empty"))
     for row in rows:
         done = bool(row["is_completed"])
-        bullet = "🟢" if done else "🔴"
-        body = f"~{row['task_text']}~" if done else row["task_text"]
-        lines.append(f"{bullet} {body}")
+        if done:
+            lines.append(f"✅ <s>{_esc(row['task_text'])}</s> ✅")
+        else:
+            lines.append(f"🔴 {_esc(row['task_text'])}")
         remind = _task_reminder_label(uid, row["remind_before_min"])
         if remind:
             lines.append(f"   ⏰ за {remind}")
@@ -1828,10 +1845,16 @@ def open_folder(call):
     text, markup = folder_tasks_text(uid, category)
     try:
         bot.edit_message_text(
-            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="HTML",
         )
     except Exception:
-        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+        bot.send_message(
+            call.message.chat.id, text, reply_markup=markup, parse_mode="HTML"
+        )
 
 
 def _task_card(uid, task_id):
@@ -1851,7 +1874,11 @@ def _task_card(uid, task_id):
 
 def task_card_text(uid, row):
     """Текст карточки одной задачи (название + срок + напоминание)."""
-    lines = [tr(uid, "task_card_title", title=row["task_text"])]
+    title = _esc(row["task_text"])
+    if row["is_completed"]:
+        lines = [f"✅ <s>{title}</s> ✅"]
+    else:
+        lines = [tr(uid, "task_card_title", title=title)]
     due = _task_due_label(uid, row["due_utc"], row["timezone"])
     if due:
         lines.append(tr(uid, "task_card_due", date=due))
@@ -1864,7 +1891,7 @@ def task_card_text(uid, row):
 
 
 def task_card_markup(uid, row):
-    """Кнопки карточки задачи: Сделано/Вернуть, Напомнить, назад к папкам."""
+    """Кнопки карточки задачи: Сделано/Вернуть, Напомнить, Удалить, назад."""
     markup = types.InlineKeyboardMarkup(row_width=1)
     done = bool(row["is_completed"])
     markup.add(
@@ -1877,6 +1904,12 @@ def task_card_markup(uid, row):
         types.InlineKeyboardButton(
             tr(uid, "task_remind_btn"),
             callback_data=f"taskrem:{row['task_id']}",
+        )
+    )
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "task_delete_btn"),
+            callback_data=f"taskdelask:{row['task_id']}",
         )
     )
     markup.add(
@@ -1904,10 +1937,16 @@ def show_task_card(call):
     markup = task_card_markup(uid, row)
     try:
         bot.edit_message_text(
-            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="HTML",
         )
     except Exception:
-        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+        bot.send_message(
+            call.message.chat.id, text, reply_markup=markup, parse_mode="HTML"
+        )
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("tasktoggle:"))
@@ -1941,10 +1980,128 @@ def toggle_task_card(call):
     markup = task_card_markup(uid, row)
     try:
         bot.edit_message_text(
-            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="HTML",
         )
     except Exception:
-        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+        bot.send_message(
+            call.message.chat.id, text, reply_markup=markup, parse_mode="HTML"
+        )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("taskdelask:"))
+def ask_delete_task(call):
+    """Показать подтверждение удаления задачи (безопасное удаление)."""
+    uid = call.from_user.id
+    try:
+        task_id = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid task")
+        return
+    row = _task_card(uid, task_id)
+    if not row:
+        bot.answer_callback_query(call.id, "Task not found")
+        return
+    bot.answer_callback_query(call.id)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "task_delete_yes"), callback_data=f"taskdelyes:{task_id}"
+        ),
+        types.InlineKeyboardButton(
+            tr(uid, "task_delete_no"), callback_data=f"taskdelno:{task_id}"
+        ),
+    )
+    text = (
+        tr(uid, "task_delete_confirm_title")
+        + "\n\n"
+        + tr(uid, "task_delete_confirm_body", title=_esc(row["task_text"]))
+    )
+    try:
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="HTML",
+        )
+    except Exception:
+        bot.send_message(
+            call.message.chat.id, text, reply_markup=markup, parse_mode="HTML"
+        )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("taskdelyes:"))
+def do_delete_task(call):
+    """Фактическое удаление задачи из БД."""
+    uid = call.from_user.id
+    try:
+        task_id = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid task")
+        return
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                "DELETE FROM tasks WHERE task_id=? AND user_id=?",
+                (task_id, uid),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    bot.answer_callback_query(call.id, "🗑 Удалено" if get_user_lang(uid) == "ru" else "🗑 Deleted")
+    # Возвращаем пользователя к списку папок.
+    text, markup = folders_view(uid)
+    try:
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="HTML",
+        )
+    except Exception:
+        bot.send_message(
+            call.message.chat.id, text, reply_markup=markup, parse_mode="HTML"
+        )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("taskdelno:"))
+def cancel_delete_task(call):
+    """Отмена удаления — вернуть карточку задачи."""
+    uid = call.from_user.id
+    try:
+        task_id = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid task")
+        return
+    row = _task_card(uid, task_id)
+    bot.answer_callback_query(call.id)
+    if not row:
+        text, markup = folders_view(uid)
+        bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id,
+            reply_markup=markup, parse_mode="HTML",
+        )
+        return
+    text = task_card_text(uid, row)
+    markup = task_card_markup(uid, row)
+    try:
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup,
+            parse_mode="HTML",
+        )
+    except Exception:
+        bot.send_message(
+            call.message.chat.id, text, reply_markup=markup, parse_mode="HTML"
+        )
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu:main")
