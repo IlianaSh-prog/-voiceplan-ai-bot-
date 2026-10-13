@@ -207,6 +207,7 @@ LANGS = {
         "cal_no_dates": "В этом месяце событий нет.",
         "cal_day_title": "📅 {date}:",
         "cal_today": "📍 Сегодня",
+        "cal_back": "⬅️ К календарю",
         "cal_legend_new": (
             "🟢 — дни с планами.\n"
             "📍 — выбранная дата.\n"
@@ -277,7 +278,7 @@ LANGS = {
         ),
         "cal_reminder_added": "✅ Напоминание добавлено: {value}.",
         "cal_reminder_below": (
-            "Нажмите «Напомнить», чтобы задать, за сколько предупредить "
+            "⏰ Кнопка под планом — поставить напоминание "
             "(например, за 15 минут или за 1 час)."
         ),
         "free_usage": "Формат: /free 10 — начислить попытки себе.\nБез аргументов — показать остаток.",
@@ -528,10 +529,11 @@ LANGS = {
         "unknown_timezone": "Unknown time zone. Use a valid IANA name, for example Europe/London.",
         "confirm_event": "Event saved.",
         "cal_title": "🗓 Calendar — {month}",
-        "cal_legend": "✳ — a day with events. Tap a date below to view them.",
+        "cal_legend": "• — days with plans. Tap a date to open it and add a plan.",
         "cal_no_dates": "No events this month.",
         "cal_day_title": "📅 {date}:",
         "cal_today": "📍 Today",
+        "cal_back": "⬅️ Back to calendar",
         "cal_legend_new": (
             "🟢 — days with plans.\n"
             "📍 — the selected date.\n"
@@ -601,7 +603,7 @@ LANGS = {
         ),
         "cal_reminder_added": "✅ Reminder added: {value}.",
         "cal_reminder_below": (
-            "Tap “Remind” to set how far in advance to be notified "
+            "⏰ The button under a plan sets a reminder "
             "(e.g. 15 minutes or 1 hour before)."
         ),
         "free_usage": "Format: /free 10 — add attempts to yourself.\nWithout arguments — show balance.",
@@ -2869,9 +2871,9 @@ def build_calendar(uid, year, month):
                 )
         markup.row(*row_buttons)
 
-    # Возврат к задачам.
+    # Возврат в меню раздела (единообразно с папками).
     markup.row(
-        types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:tasks"),
+        types.InlineKeyboardButton(tr(uid, "nav_back"), callback_data="planner:menu"),
     )
 
     return "\n".join(lines), markup
@@ -2945,6 +2947,7 @@ def calendar_open_day(call):
 
     lines = [tr(uid, "cal_day_title", date=day.strftime("%d.%m.%Y"))]
     markup = types.InlineKeyboardMarkup(row_width=1)
+    has_add_button = False
     for title, time_hhmm, fire_times, kind, item_id, offsets in items:
         lines.append(f"• {title} — {time_hhmm}")
         if offsets:
@@ -2952,18 +2955,24 @@ def calendar_open_day(call):
             for minutes in sorted({int(x) for x in offsets}):
                 lines.append(f"   ⏰ {_offset_label(uid, minutes)}")
         elif access_ok:
-            # Напоминания нет — предлагаем поставить.
+            # Напоминания нет — своя кнопка с названием плана, чтобы не путаться.
+            has_add_button = True
             markup.add(
                 types.InlineKeyboardButton(
-                    tr(uid, "cal_day_add_reminder"),
+                    f"⏰ {title[:24]}",
                     callback_data=f"calrem:{kind}:{item_id}",
                 )
             )
 
     if not items:
         lines.append(tr(uid, "cal_day_empty"))
-    else:
+    elif has_add_button:
         lines.append(tr(uid, "cal_reminder_below"))
+
+    # У каждой даты одинаковая навигация: вернуться к календарю.
+    markup.add(
+        types.InlineKeyboardButton(tr(uid, "cal_back"), callback_data="planner:menu_calendar")
+    )
 
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "\n".join(lines), reply_markup=markup)
