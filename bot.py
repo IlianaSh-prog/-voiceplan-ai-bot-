@@ -410,6 +410,7 @@ LANGS = {
         "nav_events": "📅 События",
         "nav_newcat": "➕ Новая папка",
         "nav_tasks": "⬅️ К задачам",
+        "nav_back": "⬅️ Назад",
         "task_reminder_need_balance": (
             "⏰ Напоминания к задачам доступны при положительном балансе.\n"
             "Задача сохранена, но напоминание не установлено:"
@@ -778,6 +779,7 @@ LANGS = {
         "nav_events": "📅 Events",
         "nav_newcat": "➕ New folder",
         "nav_tasks": "⬅️ To tasks",
+        "nav_back": "⬅️ Back",
         "report_usage": "Report format:\n/report 01.10.2026 10:00 05.10.2026 23:59\nor without time: /report 01.10 05.10",
     },
 }
@@ -1873,48 +1875,6 @@ def planner_menu(uid):
     return tr(uid, "planner_menu"), markup
 
 
-def dashboard(uid):
-    with db_lock:
-        conn = get_db()
-        try:
-            rows = conn.execute(
-                """SELECT task_id, category, task_text, is_completed
-                   FROM tasks WHERE user_id = ?
-                   ORDER BY is_completed ASC, category ASC, task_id DESC""",
-                (uid,),
-            ).fetchall()
-        finally:
-            conn.close()
-
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    if not rows:
-        _planner_nav(uid, markup)
-        return tr(uid, "empty_tasks"), markup
-
-    lines = [tr(uid, "dash_title")]
-    current_category = None
-
-    for row in rows:
-        category = row["category"] or SYSTEM_CATEGORIES[get_user_lang(uid)][-1]
-        if category != current_category:
-            current_category = category
-            lines.append(f"\n📂 {category}")
-
-        done = bool(row["is_completed"])
-        # Активные задачи показываем только красным кружком, без слов «В работе».
-        lines.append(f"{'🟢' if done else '🔴'} {('~' + row['task_text'] + '~') if done else row['task_text']}")
-        label = tr(uid, "btn_undone" if done else "btn_done")
-        markup.add(
-            types.InlineKeyboardButton(
-                f"{label}: {row['task_text'][:25]}",
-                callback_data=f"task:{row['task_id']}",
-            )
-        )
-
-    _planner_nav(uid, markup)
-    return "\n".join(lines), markup
-
-
 @bot.message_handler(commands=["tasks"])
 @bot.message_handler(func=lambda m: bool(m.text) and m.text in {
     LANGS["ru"]["btn_planner"], LANGS["en"]["btn_planner"]
@@ -1982,24 +1942,6 @@ def show_events(message):
     bot.send_message(message.chat.id, text, reply_markup=markup)
 
 
-@bot.message_handler(commands=["folders"])
-@bot.message_handler(func=lambda m: bool(m.text) and m.text in {
-    LANGS["ru"]["btn_folders"], LANGS["en"]["btn_folders"]
-})
-def my_tasks_screen(uid):
-    """Экран «Мои задачи»: подсказка как оформить задачу + кнопка перехода к папкам."""
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton(
-            tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
-        )
-    )
-    markup.add(
-        types.InlineKeyboardButton(tr(uid, "nav_back_menu"), callback_data="menu:main")
-    )
-    return tr(uid, "mytasks_hint"), markup
-
-
 def folders_view(uid):
     """Список папок пользователя (все) + «Новая папка» + назад к задачам/меню."""
     categories = get_user_categories(uid)
@@ -2016,7 +1958,7 @@ def folders_view(uid):
         types.InlineKeyboardButton(tr(uid, "nav_newcat"), callback_data="planner:newcat")
     )
     markup.add(
-        types.InlineKeyboardButton(tr(uid, "nav_tasks"), callback_data="planner:menu_tasks")
+        types.InlineKeyboardButton(tr(uid, "nav_back"), callback_data="planner:menu")
     )
     return text, markup
 
@@ -2052,7 +1994,7 @@ def toggle_task(call):
             conn.close()
 
     bot.answer_callback_query(call.id, "✅")
-    text, markup = dashboard(uid)
+    text, markup = folders_view(uid)
     try:
         bot.edit_message_text(
             text,
@@ -2061,7 +2003,7 @@ def toggle_task(call):
             reply_markup=markup,
         )
     except Exception:
-        logger.exception("Не удалось обновить карточку задач")
+        logger.exception("Не удалось обновить список папок")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("eventdel:"))
@@ -3123,7 +3065,7 @@ def toggle_voice_setting(call):
                 )
             except Exception:
                 logger.exception("Не удалось отправить подсказку об озвучке")
-    text, markup = dashboard(uid)
+    text, markup = folders_view(uid)
     try:
         bot.edit_message_text(
             text, call.message.chat.id, call.message.message_id, reply_markup=markup
@@ -3367,7 +3309,7 @@ def planner_router(call):
         edit_or_send(text, markup)
     elif action == "menu_tasks":
         bot.answer_callback_query(call.id)
-        text, markup = my_tasks_screen(uid)
+        text, markup = folders_view(uid)
         edit_or_send(text, markup)
     elif action == "goto_folders":
         bot.answer_callback_query(call.id)
@@ -3970,10 +3912,11 @@ def handle_voice(message):
         except Exception:
             pass
 
-        summary = tr(uid, "task_added")
-        bot.send_message(message.chat.id, summary)
-        board, markup = dashboard(uid)
-        bot.send_message(message.chat.id, board, reply_markup=markup)
+        follow = types.InlineKeyboardMarkup()
+        follow.add(types.InlineKeyboardButton(
+            tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
+        ))
+        bot.send_message(message.chat.id, tr(uid, "task_added"), reply_markup=follow)
 
         # Если создавались события — показываем актуальный календарь.
         if counts[1]:
@@ -4269,9 +4212,11 @@ def handle_plain_text(message):
         except Exception:
             pass
 
-        board, markup = dashboard(uid)
-        bot.send_message(message.chat.id, tr(uid, "task_added"))
-        bot.send_message(message.chat.id, board, reply_markup=markup)
+        follow = types.InlineKeyboardMarkup()
+        follow.add(types.InlineKeyboardButton(
+            tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
+        ))
+        bot.send_message(message.chat.id, tr(uid, "task_added"), reply_markup=follow)
 
         if result.get("new_events"):
             event_text, event_markup = upcoming_events_text(uid)
