@@ -86,9 +86,29 @@ check("tts trial 3 -> 2", tts == 2)
 # 5. Экраны рендерятся без KeyError.
 text, markup = bot.balance_screen(UID)
 check("balance_screen renders", "Баланс" in text and len(markup.keyboard) == 6)
+# Кнопка Планировщика Pro присутствует на экране баланса.
+check(
+    "balance has Planner Pro button",
+    any(
+        (getattr(b, "callback_data", "") or "") == "bal:planner"
+        for row in markup.keyboard for b in row
+    ),
+)
 top_text, top_markup = bot.topup_screen(UID)
 # 3 пакета + ЮKassa + «Назад».
 check("topup_screen renders 5 buttons", len(top_markup.keyboard) == 5)
+# Калькулятор «на что хватит» в пополнении.
+check("topup has calculator", "хватит" in top_text and "чатов" in top_text)
+# Экран Планировщика Pro.
+pl_text, pl_markup = bot.planner_screen(UID)
+check("planner_screen renders", "Планировщик" in pl_text)
+check(
+    "planner has buy button",
+    any(
+        (getattr(b, "callback_data", "") or "") == "bal:planner_buy"
+        for row in pl_markup.keyboard for b in row
+    ),
+)
 check(
     "packages 199/490/990",
     [p[0] for p in bot.TOPUP_PACKAGES] == [199, 490, 990],

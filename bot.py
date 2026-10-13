@@ -117,6 +117,10 @@ FREE_TTS_TRIES = int(os.environ.get("FREE_TTS_TRIES", "3"))
 # «Серию дней» и другие ежедневные подарки сознательно не делаем —
 # постоянные списания «в подарок» невыгодны при бесплатных пользователях.
 TOPUP_PACKAGES = ((199, 0), (490, 5), (990, 10))
+# Планировщик Pro: отдельный продукт (календарь + напоминания) без ИИ.
+# Себестоимость ≈ 0, поэтому это почти чистая маржа. Доступ на N дней.
+PLANNER_PRICE_RUB = int(os.environ.get("PLANNER_PRICE_RUB", "99"))
+PLANNER_DAYS = int(os.environ.get("PLANNER_DAYS", "30"))
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Не задана переменная TELEGRAM_BOT_TOKEN")
@@ -309,10 +313,12 @@ LANGS = {
             "планировщик задач и календарь с напоминаниями.\n"
             "2. Бесплатно: новые пользователи получают дневные лимиты чата и картинок "
             "и пробные озвучки; лимиты обновляются 1 раз в день. Первые 7 дней "
-            "календарь и напоминания бесплатны, далее — при положительном балансе.\n"
-            "3. Платные функции (чат, картинки, озвучка) оплачиваются балансом через "
-            "Telegram Stars в разделе «💎 Баланс и оплата». Автопродления нет — "
-            "баланс пополняется по желанию.\n"
+            "календарь и напоминания бесплатны для всех.\n"
+            "3. Платное: (а) ИИ-баланс — чат, картинки и озвучка оплачиваются "
+            "по факту использования с баланса через Telegram Stars; (б) Планировщик Pro — "
+            "календарь и напоминания без ИИ, 99 ₽ за 30 дней. Любой положительный "
+            "ИИ-баланс также открывает календарь. Автопродления нет — пополнение "
+            "и покупка Планировщика по желанию.\n"
             "4. Возврат — по обращению в поддержку: неиспользованный баланс "
             "возвращаем полностью; при сбоях сервиса обращайтесь в поддержку.\n"
             "5. Ответы ИИ носят информационный характер и не заменяют профессиональную "
@@ -356,6 +362,7 @@ LANGS = {
             "Первые 7 дней календарь и напоминания бесплатны."
         ),
         "bal_topup": "💰 Пополнить баланс",
+        "bal_planner": "🗓 Планировщик Pro — календарь без ИИ",
         "bal_free_gift": "🎁 Получить баланс Бесплатно",
         "bal_how": "ℹ️ Как работает баланс",
         "bal_save": "💡 Как экономить баланс",
@@ -364,6 +371,20 @@ LANGS = {
         "bal_close": "❌ Закрыть",
         "bal_back": "⬅️ Назад",
         "popular": "🔥 ПОПУЛЯРНОЕ",
+        "topup_calc_title": "💰 На что хватит пакета (ИИ-баланс):",
+        "topup_calc_line": "• {rub} ₽ ≈ {chats} чатов или {images} картинок",
+        "planner_title": (
+            "🗓 Планировщик Pro\n\n"
+            "Календарь и напоминания — без нейросетей.\n"
+            "• {price} ₽ на {days} дней.\n"
+            "• Осталось по подписке: {left} дн.\n\n"
+            "Любой положительный ИИ-баланс тоже включает календарь. "
+            "Планировщик Pro — если нейросети не нужны."
+        ),
+        "planner_done": (
+            "✅ Планировщик Pro подключён на {days} дней!\n"
+            "Календарь и напоминания снова доступны."
+        ),
         "topup_title": (
             "💰 Пополнение баланса\n"
             "Выберите пакет (оплата через Telegram Stars):"
@@ -380,9 +401,14 @@ LANGS = {
             "• Планировщик, задачи и календарь — всегда бесплатно."
         ),
         "how_balance_text": (
-            "ℹ️ Как работает баланс:\n"
-            "• Бесплатные возможности обновляются 1 раз в день.\n"
-            "• Задачи и календарь: первые 7 дней бесплатно, далее при балансе."
+            "ℹ️ Как работает баланс — два продукта:\n\n"
+            "🤖 ИИ-баланс — чат, картинки, озвучка.\n"
+            "• Тратится по факту: чат {p_chat} ₽, картинка {p_img} ₽, озвучка {p_tts} ₽/1000 знаков.\n"
+            "• Каждый день бесплатно: 3 чата и 1 картинка.\n\n"
+            "🗓 Планировщик Pro — календарь и напоминания, без ИИ.\n"
+            "• 99 ₽ на 30 дней; себестоимость≈0.\n"
+            "• Первые 7 дней — бесплатно для всех.\n\n"
+            "Любой положительный ИИ-баланс тоже открывает календарь."
         ),
         "save_balance_text": (
             "💡 Как экономить баланс:\n"
@@ -680,6 +706,7 @@ LANGS = {
             "The first 7 days the calendar and reminders are free."
         ),
         "bal_topup": "💰 Top up balance",
+        "bal_planner": "🗓 Planner Pro — calendar without AI",
         "bal_free_gift": "🎁 Get balance for free",
         "bal_how": "ℹ️ How the balance works",
         "bal_save": "💡 How to save balance",
@@ -688,6 +715,20 @@ LANGS = {
         "bal_close": "❌ Close",
         "bal_back": "⬅️ Back",
         "popular": "🔥 POPULAR",
+        "topup_calc_title": "💰 What a package buys you (AI balance):",
+        "topup_calc_line": "• {rub} RUB ≈ {chats} chats or {images} images",
+        "planner_title": (
+            "🗓 Planner Pro\n\n"
+            "Calendar and reminders — without AI.\n"
+            "• {price} RUB for {days} days.\n"
+            "• Days left: {left}.\n\n"
+            "Any positive AI balance also enables the calendar. "
+            "Planner Pro is for when you don't need AI."
+        ),
+        "planner_done": (
+            "✅ Planner Pro is active for {days} days!\n"
+            "Calendar and reminders are available again."
+        ),
         "topup_title": (
             "💰 Top up your balance\n"
             "Choose a package (paid via Telegram Stars):"
@@ -704,9 +745,14 @@ LANGS = {
             "• Planner, tasks and calendar — always free."
         ),
         "how_balance_text": (
-            "ℹ️ How the balance works:\n"
-            "• Free features refresh once a day.\n"
-            "• Tasks and calendar: first 7 days free, then with a balance."
+            "ℹ️ How it works — two products:\n\n"
+            "🤖 AI balance — chat, images, voice.\n"
+            "• Pay per use: chat {p_chat} RUB, image {p_img} RUB, voice {p_tts} RUB/1000 chars.\n"
+            "• Free every day: 3 chats and 1 image.\n\n"
+            "🗓 Planner Pro — calendar and reminders, no AI.\n"
+            "• 99 RUB for 30 days; cost ≈ 0.\n"
+            "• First 7 days free for everyone.\n\n"
+            "Any positive AI balance also unlocks the calendar."
         ),
         "save_balance_text": (
             "💡 How to save your balance:\n"
@@ -894,6 +940,9 @@ def init_db():
                 "daily_chat_left": f"INTEGER DEFAULT {FREE_CHATS_PER_DAY}",
                 "daily_image_left": f"INTEGER DEFAULT {FREE_IMAGES_PER_DAY}",
                 "show_spends": "INTEGER DEFAULT 1",
+                # Планировщик Pro: дата (ISO UTC) до которой открыт календарь
+                # и напоминания без ИИ-баланса.
+                "planner_until": "TEXT",
                 # Долгоживущий режим интерфейса (чат / картинки). Хранится в БД,
                 # чтобы не теряться при перезапуске бота (Render засыпает/просыпается,
                 # локальный перезапуск). Временные состояния (категория, часовой пояс,
@@ -1444,15 +1493,44 @@ def calendar_trial_days_left(uid):
     return max(0, int(left) if left > 0 else 0)
 
 
+def planner_until(uid):
+    """ISO-дата окончания Планировщика Pro или None."""
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT planner_until FROM users WHERE user_id = ?", (uid,)
+            ).fetchone()
+        finally:
+            conn.close()
+    if not row or not row["planner_until"]:
+        return None
+    try:
+        dt = datetime.fromisoformat(row["planner_until"])
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def planner_active(uid):
+    """Планировщик Pro ещё действует?"""
+    dt = planner_until(uid)
+    return bool(dt and dt > datetime.now(timezone.utc))
+
+
 def calendar_access(uid):
     """Доступ к календарю: (доступен?, причина).
 
-    Календарь работает при положительном балансе. Новым пользователям даётся
-    неделя (7 дней) бесплатно — доступ есть либо при балансе, либо во время триала.
-    Причина: 'paid' | 'trial' | 'expired'.
+    Доступ есть при положительном ИИ-балансе, при активном Планировщике Pro
+    или во время 7-дневного триала для новых пользователей.
+    Причина: 'paid' | 'planner' | 'trial' | 'expired'.
     """
     if has_paid_balance(uid):
         return True, "paid"
+    if planner_active(uid):
+        return True, "planner"
     days_left = calendar_trial_days_left(uid)
     if days_left > 0:
         return True, "trial"
@@ -1739,13 +1817,42 @@ def balance_screen(uid):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"),
-        types.InlineKeyboardButton(tr(uid, "bal_free_gift"), callback_data="bal:free"),
+        types.InlineKeyboardButton(tr(uid, "bal_planner"), callback_data="bal:planner"),
         types.InlineKeyboardButton(tr(uid, "bal_how"), callback_data="bal:how"),
         types.InlineKeyboardButton(tr(uid, "bal_save"), callback_data="bal:save"),
         types.InlineKeyboardButton(spends_label, callback_data="bal:spends"),
         types.InlineKeyboardButton(tr(uid, "bal_close"), callback_data="bal:close"),
     )
     return text, markup
+
+
+def _balance_calc(uid):
+    """Калькулятор: на что хватит пакета (чаты / картинки)."""
+    lines = [tr(uid, "topup_calc_title")]
+    for rub, _pct in TOPUP_PACKAGES:
+        chats = int(rub // PRICE_CHAT_RUB) if PRICE_CHAT_RUB else 0
+        images = int(rub // PRICE_IMAGE_RUB) if PRICE_IMAGE_RUB else 0
+        lines.append(
+            tr(uid, "topup_calc_line", rub=rub, chats=chats, images=images)
+        )
+    return "\n".join(lines)
+
+
+def planner_screen(uid):
+    """Экран «🗓 Планировщик Pro»: календарь и напоминания без ИИ."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton(
+        f"⭐ {PLANNER_PRICE_RUB} XTR — {PLANNER_DAYS} дн.",
+        callback_data="bal:planner_buy",
+    ))
+    markup.add(types.InlineKeyboardButton(tr(uid, "bal_back"), callback_data="bal:show"))
+    markup.add(types.InlineKeyboardButton("💳 ЮKassa", callback_data="pay_yookassa"))
+    until = planner_until(uid)
+    days = 0
+    if until:
+        left = (until - datetime.now(timezone.utc)).total_seconds() / 86400
+        days = max(0, int(left) if left > 0 else 0)
+    return tr(uid, "planner_title", price=PLANNER_PRICE_RUB, days=PLANNER_DAYS, left=days), markup
 
 
 def topup_screen(uid):
@@ -1769,7 +1876,7 @@ def topup_screen(uid):
     markup.add(
         types.InlineKeyboardButton("💳 ЮKassa", callback_data="pay_yookassa")
     )
-    return tr(uid, "topup_title"), markup
+    return tr(uid, "topup_title") + "\n\n" + _balance_calc(uid), markup
 
 
 def main_keyboard(uid):
@@ -4704,8 +4811,9 @@ def admin_report(message):
         f"🟢 Активны в периоде (писали/голосовые): {active_users}\n"
         f"📨 Запросов к ИИ: {req['n']} "
         f"(голос: {kind_map.get('voice', 0)}, текст: {kind_map.get('text', 0)})\n"
-        f"💰 Оплат: {pay['s']} XTR / {pay['r']:.2f} ₽\n"
-        f"🤖 Расход на ИИ-запросы: {req['c']:.2f} ₽",
+        f"💰 Выручка (оплаты): {pay['r']:.2f} ₽\n"
+        f"🤖 Расход на ИИ-запросы (себестоимость): {req['c']:.2f} ₽\n"
+        f"📈 Прибыль за период: {pay['r'] - req['c']:.2f} ₽",
     )
 
 
@@ -4805,6 +4913,36 @@ def successful_payment(message):
     uid = message.from_user.id
     payment = message.successful_payment
     payload = payment.invoice_payload or ""
+
+    # Планировщик Pro: planner_pro:30 → продлить календарь без ИИ.
+    if payload.startswith("planner_pro:"):
+        try:
+            days = int(payload.split(":", 1)[1])
+        except ValueError:
+            days = PLANNER_DAYS
+        _extend_planner(uid, days)
+        with db_lock:
+            conn = get_db()
+            try:
+                conn.execute(
+                    """INSERT INTO payments(user_id, amount_stars, amount_rub, payment_system)
+                       VALUES (?, ?, ?, 'Telegram Stars')""",
+                    (uid, payment.total_amount, float(PLANNER_PRICE_RUB)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        bot.send_message(uid, tr(uid, "planner_done", days=days))
+        if ADMIN_ID:
+            try:
+                bot.send_message(
+                    ADMIN_ID,
+                    f"🗓 Планировщик Pro: user_id={uid}, +{days} дн., "
+                    f"звёзды={payment.total_amount}",
+                )
+            except Exception:
+                logger.exception("Не удалось уведомить администратора о Планировщике")
+        return
 
     # Новый формат: bal_topup:199 → зачисление на баланс + бонус пакета.
     if payload.startswith("bal_topup:"):
@@ -5117,6 +5255,49 @@ def bal_buy(call):
     )
 
 
+@bot.callback_query_handler(func=lambda call: call.data == "bal:planner")
+def bal_planner(call):
+    """Экран «🗓 Планировщик Pro» — календарь и напоминания без ИИ."""
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    text, markup = planner_screen(uid)
+    _edit_or_send(call, text, markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "bal:planner_buy")
+def bal_planner_buy(call):
+    """Инвойс Telegram Stars на Планировщик Pro (календарь без ИИ)."""
+    uid = call.from_user.id
+    bot.answer_callback_query(call.id)
+    bot.send_invoice(
+        chat_id=call.message.chat.id,
+        title="VoicePlan — Планировщик Pro",
+        description=f"Календарь и напоминания на {PLANNER_DAYS} дней, без ИИ.",
+        invoice_payload=f"planner_pro:{PLANNER_DAYS}",
+        provider_token="",
+        currency="XTR",
+        prices=[types.LabeledPrice(label=f"Планировщик {PLANNER_DAYS} дн.", amount=PLANNER_PRICE_RUB)],
+    )
+
+
+def _extend_planner(uid, days):
+    """Продлить Планировщик Pro на days дней. Возвращает новую дату (ISO)."""
+    current = planner_until(uid)
+    now = datetime.now(timezone.utc)
+    base = current if (current and current > now) else now
+    new_until = base + timedelta(days=days)
+    text = new_until.isoformat(timespec="seconds")
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            conn.execute("UPDATE users SET planner_until=? WHERE user_id=?", (text, uid))
+            conn.commit()
+        finally:
+            conn.close()
+    return text
+
+
 @bot.callback_query_handler(func=lambda call: call.data == "bal:free")
 def bal_free(call):
     uid = call.from_user.id
@@ -5139,7 +5320,13 @@ def bal_how(call):
     bot.answer_callback_query(call.id)
     bot.send_message(
         call.message.chat.id,
-        tr(uid, "how_balance_text"),
+        tr(
+            uid,
+            "how_balance_text",
+            p_chat=f"{PRICE_CHAT_RUB:g}",
+            p_img=f"{PRICE_IMAGE_RUB:g}",
+            p_tts=f"{PRICE_TTS_RUB_PER_1K:g}",
+        ),
     )
 
 
