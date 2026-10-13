@@ -307,8 +307,8 @@ LANGS = {
             "1. Сервис — ИИ-ассистент VoicePlan: чат с нейросетью, генерация картинок, "
             "планировщик задач и календарь с напоминаниями.\n"
             "2. Бесплатно: новые пользователи получают дневные лимиты чата и картинок "
-            "и пробные озвучки; лимиты обновляются 1 раз в день. Планировщик, задачи "
-            "и календарь — без лимитов.\n"
+            "и пробные озвучки; лимиты обновляются 1 раз в день. Первые 7 дней "
+            "календарь и напоминания бесплатны, далее — при положительном балансе.\n"
             "3. Платные функции (чат, картинки, озвучка) оплачиваются балансом через "
             "Telegram Stars в разделе «💎 Баланс и оплата». Автопродления нет — "
             "баланс пополняется по желанию.\n"
@@ -351,7 +351,8 @@ LANGS = {
             "• Картинки: {images} из {images_max}\n\n"
             "🔊 Пробные озвучки: {tts_free} — выдаются один раз при первом "
             "запуске и не обновляются.\n\n"
-            "Планировщик, задачи и календарь — бесплатно навсегда."
+            "Задачи и напоминания — при балансе. "
+            "Первые 7 дней календарь и напоминания бесплатны."
         ),
         "bal_topup": "💰 Пополнить баланс",
         "bal_free_gift": "🎁 Получить баланс Бесплатно",
@@ -380,7 +381,7 @@ LANGS = {
         "how_balance_text": (
             "ℹ️ Как работает баланс:\n"
             "• Бесплатные возможности обновляются 1 раз в день.\n"
-            "• Планировщик — бесплатно навсегда."
+            "• Задачи и календарь: первые 7 дней бесплатно, далее при балансе."
         ),
         "save_balance_text": (
             "💡 Как экономить баланс:\n"
@@ -420,6 +421,7 @@ LANGS = {
         "btn_my_tasks": "✅ Мои задачи",
         "nav_calendar_menu": "🗓 Календарь",
         "nav_back_menu": "⬅️ Назад в меню",
+        "menu_returned": "🏠 Главное меню. Выберите действие на клавиатуре внизу.",
         "mytasks_hint": (
             "✍️ Наговорите или напишите свою задачу.\n\n"
             "Можно указать:\n"
@@ -439,7 +441,7 @@ LANGS = {
         "task_folder_menu_title": "📂 Выберите папку:",
         "task_card_title": "📝 {title}",
         "task_card_due": "🕒 Срок: {date}",
-        "task_card_reminder": "⏰ Напомню за {value}",
+        "task_card_reminder": "⏰ Напомню {value}",
         "task_card_reminder_off": "⏰ Напоминание не установлено",
         "task_done_btn": "✅ Сделано",
         "task_undone_btn": "↩️ Вернуть",
@@ -671,7 +673,8 @@ LANGS = {
             "• Images: {images} of {images_max}\n\n"
             "🔊 Trial voice replies: {tts_free} — given once on first launch, "
             "they do not refresh.\n\n"
-            "Planner, tasks and calendar — free forever."
+            "Tasks and reminders — with a balance. "
+            "The first 7 days the calendar and reminders are free."
         ),
         "bal_topup": "💰 Top up balance",
         "bal_free_gift": "🎁 Get balance for free",
@@ -700,7 +703,7 @@ LANGS = {
         "how_balance_text": (
             "ℹ️ How the balance works:\n"
             "• Free features refresh once a day.\n"
-            "• Planner — free forever."
+            "• Tasks and calendar: first 7 days free, then with a balance."
         ),
         "save_balance_text": (
             "💡 How to save your balance:\n"
@@ -732,6 +735,7 @@ LANGS = {
         "btn_my_tasks": "✅ My tasks",
         "nav_calendar_menu": "🗓 Calendar",
         "nav_back_menu": "⬅️ Back to menu",
+        "menu_returned": "🏠 Main menu. Choose an action on the keyboard below.",
         "mytasks_hint": (
             "✍️ Record or type your task.\n\n"
             "You can specify:\n"
@@ -750,7 +754,7 @@ LANGS = {
         "task_folder_menu_title": "📂 Choose a folder:",
         "task_card_title": "📝 {title}",
         "task_card_due": "🕒 Due: {date}",
-        "task_card_reminder": "⏰ Remind {value} before",
+        "task_card_reminder": "⏰ Remind {value}",
         "task_card_reminder_off": "⏰ No reminder set",
         "task_done_btn": "✅ Done",
         "task_undone_btn": "↩️ Undo",
@@ -1957,6 +1961,8 @@ def upcoming_events_text(uid):
             offsets = []
 
         lines.append(tr(uid, "event_card", title=row["title"], date=date_text))
+        for minutes in sorted({int(x) for x in offsets}):
+            lines.append(f"   ⏰ {_offset_label(uid, minutes)}")
         markup.add(
             types.InlineKeyboardButton(
                 f"🗑 {row['title'][:30]}",
@@ -2144,7 +2150,7 @@ def folder_tasks_text(uid, category):
             lines.append(f"🔴 {_esc(row['task_text'])}")
         remind = _task_reminder_label(uid, row["remind_before_min"])
         if remind:
-            lines.append(f"   ⏰ за {remind}")
+            lines.append(f"   ⏰ {remind}")
 
     markup = types.InlineKeyboardMarkup(row_width=1)
     for row in rows:
@@ -2437,23 +2443,24 @@ def cancel_delete_task(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "menu:main")
 def back_to_main_menu(call):
-    """Кнопка «⬅️ Назад в меню» — показать главное меню бота."""
+    """Кнопка «⬅️ Назад в меню» — вернуться к главному меню.
+
+    Главное меню — это постоянная клавиатура внизу, поэтому не нужно
+    заново присылать длинное приветствие: просто закрываем раздел и
+    показываем короткую подсказку с меню.
+    """
     uid = call.from_user.id
     leave_mode(uid)
-    bot.answer_callback_query(call.id)
-    _paid, _bonus, _tts, chats, images, _show = get_balance(uid)
-    bot.send_message(
-        call.message.chat.id,
-        tr(
-            uid,
-            "welcome",
-            name=call.from_user.first_name or "друг",
-            chats=chats,
-            images=images,
-            total=f"{_paid + _bonus:.2f}",
-        ),
-        reply_markup=main_keyboard(uid),
-    )
+    bot.answer_callback_query(call.id, "🏠")
+    try:
+        bot.edit_message_text(
+            tr(uid, "menu_returned"),
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=main_keyboard(uid),
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, tr(uid, "menu_returned"), reply_markup=main_keyboard(uid))
 
 
 def task_reminder_markup(uid, task_id):
