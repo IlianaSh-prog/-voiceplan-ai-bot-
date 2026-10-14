@@ -103,16 +103,22 @@ WHISPER_PRICE_RUB_PER_MIN = float(os.environ.get("WHISPER_PRICE_RUB_PER_MIN", "1
 # Нейросети нового интерфейса: чат и картинки (модели и цены настраиваются в env).
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "gpt-4o-mini")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-1")
-IMAGE_PRICE_RUB = float(os.environ.get("IMAGE_PRICE_RUB", "3"))
+# Качество картинки: "low" (~1.5₽), "medium" (~3.5₽), "high" (~15₽).
+IMAGE_QUALITY = os.environ.get("IMAGE_QUALITY", "low")
+IMAGE_PRICE_RUB = float(os.environ.get("IMAGE_PRICE_RUB", "1.5"))
 
 # Балансная модель: цены для пользователя и дневные бесплатные нормы.
 PRICE_CHAT_RUB = float(os.environ.get("PRICE_CHAT_RUB", "1"))
-PRICE_IMAGE_RUB = float(os.environ.get("PRICE_IMAGE_RUB", "5"))
-PRICE_TTS_RUB_PER_1K = float(os.environ.get("PRICE_TTS_RUB_PER_1K", "1"))
+PRICE_IMAGE_RUB = float(os.environ.get("PRICE_IMAGE_RUB", "9"))
+PRICE_TTS_RUB_PER_1K = float(os.environ.get("PRICE_TTS_RUB_PER_1K", "3"))
 FREE_CHATS_PER_DAY = int(os.environ.get("FREE_CHATS_PER_DAY", "3"))
 FREE_IMAGES_PER_DAY = int(os.environ.get("FREE_IMAGES_PER_DAY", "1"))
 # Пробные озвучки выдаются один раз при подключении (не ежедневно).
 FREE_TTS_TRIES = int(os.environ.get("FREE_TTS_TRIES", "3"))
+# Голосовые задачи: включено N в день (Whisper — основная себестоимость).
+# Сверх квоты — списание VOICE_TASK_PRICE_RUB с баланса, иначе отказ.
+FREE_VOICE_TASKS_PER_DAY = int(os.environ.get("FREE_VOICE_TASKS_PER_DAY", "5"))
+VOICE_TASK_PRICE_RUB = float(os.environ.get("VOICE_TASK_PRICE_RUB", "2"))
 # Пакеты пополнения через Telegram Stars: (сумма ₽, бонус %).
 # «Серию дней» и другие ежедневные подарки сознательно не делаем —
 # постоянные списания «в подарок» невыгодны при бесплатных пользователях.
@@ -424,6 +430,12 @@ LANGS = {
         "spend_chat": "чат",
         "spend_image": "картинка",
         "spend_tts": "озвучка",
+        "spend_voice": "голосовая задача",
+        "voice_tasks_limit": (
+            "🎙 Бесплатные голосовые задачи на сегодня закончились.\n\n"
+            "В день включено 5 голосовых. Доп. голосовая задача — "
+            "{price} ₽ с баланса. Текстом и в планировщике — без ограничений."
+        ),
         "tts_locked": (
             "🔇 Пробные озвучки закончились. Озвучка включится при "
             "положительном балансе ({price} ₽/1000 знаков)."
@@ -768,6 +780,12 @@ LANGS = {
         "spend_chat": "chat",
         "spend_image": "image",
         "spend_tts": "voice reply",
+        "spend_voice": "voice task",
+        "voice_tasks_limit": (
+            "🎙 Free voice tasks for today are used up.\n\n"
+            "5 voice tasks a day are included. An extra voice task costs "
+            "{price} RUB from your balance. Text and planner are unlimited."
+        ),
         "tts_locked": (
             "🔇 Trial voice replies are used up. Voice replies will turn on "
             "with a positive balance ({price} RUB/1000 characters)."
@@ -939,6 +957,7 @@ def init_db():
                 "free_day": "TEXT DEFAULT ''",
                 "daily_chat_left": f"INTEGER DEFAULT {FREE_CHATS_PER_DAY}",
                 "daily_image_left": f"INTEGER DEFAULT {FREE_IMAGES_PER_DAY}",
+                "daily_voice_left": f"INTEGER DEFAULT {FREE_VOICE_TASKS_PER_DAY}",
                 "show_spends": "INTEGER DEFAULT 1",
                 # Планировщик Pro: дата (ISO UTC) до которой открыт календарь
                 # и напоминания без ИИ-баланса.
@@ -1316,6 +1335,56 @@ def oferta_gate(message):
     return False
 
 
+def get_voice_quota(uid):
+    """(daily_voice_left, is_premium) с суточным сбросом."""
+    ensure_daily(uid)
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT daily_voice_left, is_premium FROM users WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+        finally:
+            conn.close()
+    if not row:
+        return 0, 0
+    return int(row["daily_voice_left"] or 0), int(row["is_premium"] or 0)
+
+
+def try_consume_voice_task(uid):
+    """Проверить и списать возможность голосовой задачи.
+
+    Порядок: Premium (легаси) безлимит -> дневная квота (5/день)
+    -> доп. голос с баланса (VOICE_TASK_PRICE_RUB). Возвращает (ок?, причина).
+    """
+    ensure_daily(uid)
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            row = conn.execute(
+                "SELECT daily_voice_left, is_premium "
+                "FROM users WHERE user_id = ?", (uid,),
+            ).fetchone()
+            if row and row["is_premium"]:
+                return True, "premium"
+            if row and int(row["daily_voice_left"] or 0) > 0:
+                conn.execute(
+                    "UPDATE users SET daily_voice_left = daily_voice_left - 1 WHERE user_id = ?",
+                    (uid,),
+                )
+                conn.commit()
+                return True, "daily"
+        finally:
+            conn.close()
+    # Дневная квота исчерпана — доп. голосовые с баланса.
+    if spend_from_balance(uid, VOICE_TASK_PRICE_RUB):
+        maybe_receipt(uid, VOICE_TASK_PRICE_RUB, "spend_voice")
+        return True, "paid"
+    return False, "blocked"
+
+
 def consume_attempt(uid):
     """Списать одну бесплатную попытку (легаси: голосовые входы планера)."""
     with db_lock:
@@ -1347,8 +1416,9 @@ def ensure_daily(uid):
             if not row or (row["free_day"] or "") != today:
                 conn.execute(
                     """UPDATE users SET free_day = ?, daily_chat_left = ?,
-                       daily_image_left = ? WHERE user_id = ?""",
-                    (today, FREE_CHATS_PER_DAY, FREE_IMAGES_PER_DAY, uid),
+                       daily_image_left = ?, daily_voice_left = ? WHERE user_id = ?""",
+                    (today, FREE_CHATS_PER_DAY, FREE_IMAGES_PER_DAY,
+                     FREE_VOICE_TASKS_PER_DAY, uid),
                 )
                 conn.commit()
         finally:
@@ -3993,10 +4063,11 @@ def handle_voice(message):
                 os.remove(path)
         return
 
-    free, premium = get_user_data(uid)
-
-    if free <= 0 and not premium:
-        bot.send_message(uid, tr(uid, "premium", free=free))
+    allowed, reason = try_consume_voice_task(uid)
+    if not allowed:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"))
+        bot.send_message(uid, tr(uid, "voice_tasks_limit"), reply_markup=markup)
         return
 
     status = bot.reply_to(message, tr(uid, "processing"))
@@ -4021,7 +4092,7 @@ def handle_voice(message):
             audio_seconds=getattr(message.voice, "duration", 0) or 0,
         )
         force_date = selected_cal_date.pop(uid, None)
-        counts = save_ai_result(uid, result, use_voice_limit=True, force_date=force_date)
+        counts = save_ai_result(uid, result, use_voice_limit=False, force_date=force_date)
 
         try:
             bot.delete_message(message.chat.id, status.message_id)
@@ -5074,6 +5145,10 @@ def generate_image(uid, prompt):
             "prompt": prompt,
             "n": 1,
             "size": "1024x1024",
+            # quality=low держит себестоимость предсказуемой (~1.5₽),
+            # чтобы цена 9₽ давала маржу. Можно сменить на "medium"/"high"
+            # и поднять цену, изменив PRICE_IMAGE_RUB.
+            "quality": IMAGE_QUALITY,
         },
         timeout=300,
     )
