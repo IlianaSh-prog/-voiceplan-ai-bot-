@@ -30,9 +30,17 @@ def _esc(value):
 # 1. ЛОГИРОВАНИЕ И HEALTH CHECK ДЛЯ RENDER
 # ============================================================
 
+# Диагностика: пишем лог и в консоль, и в файл — чтобы сбои (например, обрыв
+# отправки или ошибки ИИ) было видно даже когда бот запущен фоном и чёрное окно
+# закрыто. Файл рядом с ботом; путь можно переопределить через LOG_PATH.
+LOG_PATH = os.environ.get("LOG_PATH", "voiceplan.log")
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s"
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger("voiceplan")
 
@@ -4583,6 +4591,9 @@ def image_command(message):
 def text_router(message):
     uid = message.from_user.id
     text = message.text
+    # Диагностика в файл: фиксируем, что текст дошёл и в каком режиме бот был,
+    # чтобы при «молчании» отличить недоставку сообщения от сбоя внутри ветки.
+    logger.info("text uid=%s mode=%r text=%r", uid, ui_mode(uid), text[:40])
 
     # Публичная оферта должна быть принята до любых действий.
     if not oferta_gate(message):
