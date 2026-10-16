@@ -17,6 +17,9 @@ for suffix in ("", "-wal", "-shm"):
         pass
 
 os.environ["DB_PATH"] = tmp_db
+# Смоук проверяет только ui_mode — фильтр свежего ID (блок 12 в _smoke_guard)
+# здесь отключён, чтобы register_user не ставил капчу и не лил в лог ошибки.
+os.environ["SIGNUP_FRESH_CAPTCHA"] = "0"
 try:
     os.environ.pop("ADMIN_ID", None)
 except Exception:

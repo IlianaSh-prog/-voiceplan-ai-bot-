@@ -5,6 +5,7 @@ import time
 import base64
 import tempfile
 import uuid
+import hashlib
 import calendar as calmod
 import sqlite3
 import logging
@@ -113,20 +114,83 @@ CHAT_MODEL = os.environ.get("CHAT_MODEL", "gpt-4o-mini")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-1")
 # Качество картинки: "low" (~1.5₽), "medium" (~3.5₽), "high" (~15₽).
 IMAGE_QUALITY = os.environ.get("IMAGE_QUALITY", "low")
-IMAGE_PRICE_RUB = float(os.environ.get("IMAGE_PRICE_RUB", "1.5"))
 
 # Балансная модель: цены для пользователя и дневные бесплатные нормы.
-PRICE_CHAT_RUB = float(os.environ.get("PRICE_CHAT_RUB", "1"))
-PRICE_IMAGE_RUB = float(os.environ.get("PRICE_IMAGE_RUB", "9"))
+# Чат — пофактовая тарификация (по образцу UnlimAI): цена запроса зависит от его
+# объёма и объёма ответа: (токены входа × LLM_PRICE_IN_RUB + токены ответа ×
+# LLM_PRICE_OUT_RUB) / 1M × AI_MARKUP, в пределах [CHAT_MIN_RUB; CHAT_MAX_RUB].
+AI_MARKUP = float(os.environ.get("AI_MARKUP", "5"))
+CHAT_MIN_RUB = float(os.environ.get("CHAT_MIN_RUB", "0.10"))
+CHAT_MAX_RUB = float(os.environ.get("CHAT_MAX_RUB", "2"))
+# Типичная цена запроса — только для калькулятора пакетов «на что хватит».
+CHAT_TYPICAL_RUB = float(os.environ.get("CHAT_TYPICAL_RUB", "0.5"))
+# Озвучка: за 1000 знаков текста (себестоимость TTS_PRICE_RUB_PER_1K ≈ 1.5 ₽).
 PRICE_TTS_RUB_PER_1K = float(os.environ.get("PRICE_TTS_RUB_PER_1K", "3"))
+# Картинки — цена для пользователя по качеству (наценка ×2 к себестоимости —
+# верх рыночного диапазона 50–100%; прежняя фиксированная 9 ₽ была наценкой 500%).
+IMAGE_PRICES_RUB = {
+    "low": float(os.environ.get("PRICE_IMAGE_LOW_RUB", "3")),
+    "medium": float(os.environ.get("PRICE_IMAGE_MEDIUM_RUB", "7")),
+    "high": float(os.environ.get("PRICE_IMAGE_HIGH_RUB", "30")),
+}
+# Себестоимость картинки по качеству — для админ-отчёта (/report).
+IMAGE_COSTS_RUB = {"low": 1.5, "medium": 3.5, "high": 15.0}
 FREE_CHATS_PER_DAY = int(os.environ.get("FREE_CHATS_PER_DAY", "3"))
-FREE_IMAGES_PER_DAY = int(os.environ.get("FREE_IMAGES_PER_DAY", "1"))
+# Разовые подарки при регистрации (не сбрасываются ежедневно): одна картинка
+# и 5 голосовых задач ≈ 6.5 ₽ себестоимости на нового пользователя —
+# потолок накладных расходов на бесплатку при любом наплыве регистраций.
+FREE_IMAGES_ONCE = int(os.environ.get("FREE_IMAGES_ONCE", "1"))
 # Пробные озвучки выдаются один раз при подключении (не ежедневно).
 FREE_TTS_TRIES = int(os.environ.get("FREE_TTS_TRIES", "3"))
-# Голосовые задачи: включено N в день (Whisper — основная себестоимость).
+# Голосовые задачи: разово при регистрации (Whisper — основная себестоимость).
 # Сверх квоты — списание VOICE_TASK_PRICE_RUB с баланса, иначе отказ.
-FREE_VOICE_TASKS_PER_DAY = int(os.environ.get("FREE_VOICE_TASKS_PER_DAY", "5"))
-VOICE_TASK_PRICE_RUB = float(os.environ.get("VOICE_TASK_PRICE_RUB", "2"))
+# 3 ₽ при себестоимости ≈1.5 ₽/мин — наценка 100%, как у рыночных ботов.
+FREE_VOICE_TASKS_ONCE = int(os.environ.get("FREE_VOICE_TASKS_ONCE", "5"))
+VOICE_TASK_PRICE_RUB = float(os.environ.get("VOICE_TASK_PRICE_RUB", "3"))
+# Лимиты бесплатного чата: длина запроса и объём ответа. Платящим за токены
+# лимитов нет (их защищает только потолок CHAT_MAX_RUB) — ограничения нужны
+# именно бесплатке, чтобы 3 чата/день стоили ≈0.17 ₽, а не копейки «с запасом».
+FREE_MSG_MAX_CHARS = int(os.environ.get("FREE_MSG_MAX_CHARS", "2000"))
+FREE_ANSWER_MAX_TOKENS = int(os.environ.get("FREE_ANSWER_MAX_TOKENS", "800"))
+PAID_ANSWER_MAX_TOKENS = int(os.environ.get("PAID_ANSWER_MAX_TOKENS", "4000"))
+# Лаконичный режим: при балансе ниже порога отвечаем коротко
+# (SHORT_ANSWER_MAX_TOKENS ≈ до 200 знаков), чтобы фактическая цена запроса
+# гарантированно не превысила остаток — без ухода в минус и без клампа.
+CHAT_SHORT_MODE_RUB = float(os.environ.get("CHAT_SHORT_MODE_RUB", "0.50"))
+SHORT_ANSWER_MAX_TOKENS = int(os.environ.get("SHORT_ANSWER_MAX_TOKENS", "80"))
+# Защита бесплатки от наплыва регистраций и «пауза», пока админ не в сети:
+# • /guard on|off — мгновенный стоп/пуск бесплатных бонусов без деплоя;
+# • USER_MILESTONES — вехи роста: при пересечении админу уходит просьба
+#   пересмотреть условия бесплатных возможностей;
+# • MAX_NEW_USERS_PER_DAY — потолок новых регистраций с подарками в сутки,
+#   сверх него аккаунты создаются без бесплатных норм (free_off=1).
+#   Расходы на подарки при этом ограничены: ≈6.5 ₽ × MAX_NEW_USERS_PER_DAY/сутки.
+USER_MILESTONES = tuple(
+    int(x)
+    for x in os.environ.get(
+        "USER_MILESTONES", "100,250,500,1000,2500,5000,10000,25000,50000,100000"
+    ).split(",")
+    if x.strip()
+)
+MAX_NEW_USERS_PER_DAY = int(os.environ.get("MAX_NEW_USERS_PER_DAY", "300"))
+# Флуд-защита регистраций (скользящее окно на ВСЕ новые аккаунты):
+# • превышение SIGNUP_CAPTCHA_LIMIT за окно → новые пользователи подтверждают
+#   «Я не робот» (одноразовый токен с TTL), подарки выдаются после нажатия;
+# • превышение SIGNUP_BURST_LIMIT за окно → guard включается АВТОМАТИЧЕСКИ
+#   (+ срочное оповещение админу с повтором); после автостопа капча
+#   действует ещё SIGNUP_CAPTCHA_TTL секунд кулдауна.
+SIGNUP_BURST_WINDOW = int(os.environ.get("SIGNUP_BURST_WINDOW", "10"))
+SIGNUP_BURST_LIMIT = int(os.environ.get("SIGNUP_BURST_LIMIT", "20"))
+SIGNUP_CAPTCHA_LIMIT = int(os.environ.get("SIGNUP_CAPTCHA_LIMIT", "5"))
+SIGNUP_CAPTCHA_TTL = int(os.environ.get("SIGNUP_CAPTCHA_TTL", "900"))
+SIGNUP_CAPTCHA_TIMEOUT = int(os.environ.get("SIGNUP_CAPTCHA_TIMEOUT", "300"))
+# Свежий ID (C-lite): аккаунт, моложе всех ранее виденных ботом. ID Telegram
+# выдаются монотонно, поэтому «uid > границы seen» ≈ «создан позже всех» —
+# дешёвая эвристика одноразового свежесозданного аккаунта: капча ставится даже
+# одной регистрацией, без порогов всплеска (добивает drip-атаку по 1 аккаунту).
+# Граница — bot_meta.uid_hi, инициализируется по MAX(user_id) из истории.
+# Отключение: SIGNUP_FRESH_CAPTCHA=0.
+SIGNUP_FRESH_CAPTCHA = os.environ.get("SIGNUP_FRESH_CAPTCHA", "1") != "0"
 # Пакеты пополнения через Telegram Stars: (сумма ₽, бонус %).
 # «Серию дней» и другие ежедневные подарки сознательно не делаем —
 # постоянные списания «в подарок» невыгодны при бесплатных пользователях.
@@ -135,6 +199,12 @@ TOPUP_PACKAGES = ((199, 0), (490, 5), (990, 10))
 # Себестоимость ≈ 0, поэтому это почти чистая маржа. Доступ на N дней.
 PLANNER_PRICE_RUB = int(os.environ.get("PLANNER_PRICE_RUB", "99"))
 PLANNER_DAYS = int(os.environ.get("PLANNER_DAYS", "30"))
+
+# Антифлуд: скользящее окно на пользователя для текстовых и голосовых сообщений.
+# Не более FLOOD_MAX_EVENTS сообщений за FLOOD_WINDOW_SEC секунд;
+# админ не ограничивается. Настройки можно менять через env без правки кода.
+FLOOD_WINDOW_SEC = float(os.environ.get("FLOOD_WINDOW_SEC", "10"))
+FLOOD_MAX_EVENTS = int(os.environ.get("FLOOD_MAX_EVENTS", "6"))
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Не задана переменная TELEGRAM_BOT_TOKEN")
@@ -214,6 +284,10 @@ LANGS = {
         ),
         "premium": "🎙 Бесплатных голосовых разборов осталось: {free}.",
         "not_admin": "Команда доступна только администратору.",
+        "flood_warn": (
+            "⏳ Вы отправляете сообщения слишком часто. "
+            "Пожалуйста, подождите пару секунд и попробуйте снова."
+        ),
         "grant_usage": "Формат: `/add_free USER_ID КОЛИЧЕСТВО`",
         "grant_ok": "✅ Добавлено попыток: {count}.",
         "grant_user": "🎁 Вам начислено голосовых разборов: +{count}.",
@@ -226,6 +300,9 @@ LANGS = {
         "cal_day_title": "📅 {date}:",
         "cal_today": "📍 Сегодня",
         "cal_back": "⬅️ К календарю",
+        "cal_delete_btn": "🗑 Удалить",
+        "cal_delete_confirm_title": "🗑 Удалить план?",
+        "cal_delete_confirm_body": "«{title}» будет удалено безвозвратно. Точно удалить?",
         "cal_legend_new": (
             "🟢 — дни с планами.\n"
             "📍 — выбранная дата.\n"
@@ -295,6 +372,10 @@ LANGS = {
             "⏰ Напоминания к событиям подключаются при положительном балансе."
         ),
         "cal_reminder_added": "✅ Напоминание добавлено: {value}.",
+        "cal_remind_change_btn": "🔄 Изменить напоминание",
+        "cal_remind_off_btn": "🚫 Убрать напоминание",
+        "cal_reminder_current": "Текущее напоминание: {value}. Выберите новое или уберите:",
+        "evt_back": "⬅️ К списку событий",
         "cal_reminder_below": (
             "⏰ Кнопка под планом — поставить напоминание "
             "(например, за 15 минут или за 1 час)."
@@ -329,7 +410,10 @@ LANGS = {
             "и пробные озвучки; лимиты обновляются 1 раз в день. Первые 7 дней "
             "календарь и напоминания бесплатны для всех.\n"
             "3. Платное: (а) ИИ-баланс — чат, картинки и озвучка оплачиваются "
-            "по факту использования с баланса через Telegram Stars; (б) Планировщик Pro — "
+            "по факту использования с баланса через Telegram Stars: цена чата "
+            "зависит от объёма запроса и ответа, цена картинки — от качества, "
+            "цена озвучки — от длины текста (озвучка одного и того же текста "
+            "списывается один раз); (б) Планировщик Pro — "
             "календарь и напоминания без ИИ, 99 ₽ за 30 дней. Любой положительный "
             "ИИ-баланс также открывает календарь. Автопродления нет — пополнение "
             "и покупка Планировщика по желанию.\n"
@@ -361,17 +445,61 @@ LANGS = {
             "Проверьте баланс — кнопка ниже. "
             "Бесплатные возможности обновляются 1 раз в день."
         ),
+        "free_paused": (
+            "🛡 Бесплатные возможности временно приостановлены "
+            "(режим защиты).\nПродолжить работу поможет пополнение баланса."
+        ),
+        "free_off_notice": (
+            "⛔ Бесплатные возможности для вашего аккаунта не активны.\n"
+            "Работа доступна с баланса. Вопросы — администратору."
+        ),
+        "captcha_required": (
+            "🛡 Сейчас высокая активность регистраций — подтвердите, "
+            "что вы человек, чтобы получить стартовые подарки.\n"
+            "Кнопка действует {sec} сек. Если истекла — отправьте /start ещё раз."
+        ),
+        "captcha_btn": "✅ Я не робот",
+        "captcha_toast_ok": "Подтверждено!",
+        "captcha_expired": "Срок истёк — отправьте /start ещё раз.",
+        "captcha_done": "✅ Человек подтверждён.",
+        "captcha_granted": (
+            "✅ Спасибо! Стартовые подарки зачислены: {chats} чатов в день, "
+            "{img} картинка, {voice} голосовых задач, {tts} пробных озвучек."
+        ),
+        "captcha_needed": (
+            "🤖 Нужно подтвердить, что вы не робот: нажмите кнопку "
+            "«✅ Я не робот» выше. Если её нет — отправьте /start."
+        ),
+        "guard_status_on": (
+            "🛡 Режим защиты: ВКЛ.\n"
+            "Бесплатные подарки и дневные квоты приостановлены, новые "
+            "пользователи создаются без бесплатных норм — работают только "
+            "балансы и Premium.\n"
+            "Пользователей всего: {total}, новых сегодня: {today} "
+            "(лимит регистраций с подарками: {cap}).\n"
+            "Флуд-защита: автостоп при {burst} регистрациях за {window} сек, "
+            "капча при {captcha} за окно.\n"
+            "Выключить: /guard off"
+        ),
+        "guard_status_off": (
+            "🛡 Режим защиты: ВЫКЛ.\n"
+            "Бесплатные подарки и квоты работают штатно.\n"
+            "Пользователей всего: {total}, новых сегодня: {today} "
+            "(лимит регистраций с подарками: {cap}).\n"
+            "Флуд-защита: автостоп при {burst} регистрациях за {window} сек, "
+            "капча при {captcha} за окно.\n"
+            "Включить: /guard on"
+        ),
         "bal_open": "💰 Посмотреть баланс",
         "balance_text": (
             "💰 Баланс\n"
             "Всего: {total} ₽\n"
             "Платный: {paid} ₽\n"
             "Бонусный: {bonus} ₽\n\n"
-            "🆓 Бесплатно каждый день (обновляется 1 раз в день):\n"
-            "• Чат: {chats} из {chats_max}\n"
-            "• Картинки: {images} из {images_max}\n\n"
-            "🔊 Пробные озвучки: {tts_free} — выдаются один раз при первом "
-            "запуске и не обновляются.\n\n"
+            "🆓 Бесплатно:\n"
+            "• Чат: {chats} из {chats_max} — обновляется каждый день.\n"
+            "• Картинки: {images} из {images_max} — один раз при регистрации.\n\n"
+            "🔊 Пробные озвучки: {tts_free} — один раз при регистрации.\n\n"
             "Задачи и напоминания — при балансе. "
             "Первые 7 дней календарь и напоминания бесплатны."
         ),
@@ -386,7 +514,7 @@ LANGS = {
         "bal_back": "⬅️ Назад",
         "popular": "🔥 ПОПУЛЯРНОЕ",
         "topup_calc_title": "💰 На что хватит пакета (ИИ-баланс):",
-        "topup_calc_line": "• {rub} ₽ ≈ {chats} чатов или {images} картинок",
+        "topup_calc_line": "• {rub} ₽ ≈ {chats} запросов чата или {images} картинок low",
         "planner_title": (
             "🗓 Планировщик Pro\n\n"
             "Календарь и напоминания — без нейросетей.\n"
@@ -409,16 +537,21 @@ LANGS = {
         ),
         "free_gift_text": (
             "🎁 Бесплатно:\n"
-            "• Каждый день: {chats} чата и {images} картинка — "
-            "обновляются 1 раз в день.\n"
-            "• Новым пользователям: {tts} пробные озвучки ответов.\n"
+            "• Каждый день: {chats} чата.\n"
+            "• Новым пользователям: {images} картинка, {tts} пробные озвучки "
+            "и {voice} голосовых задач — всё один раз при регистрации.\n"
             "• Планировщик, задачи и календарь — всегда бесплатно."
         ),
         "how_balance_text": (
             "ℹ️ Как работает баланс — два продукта:\n\n"
             "🤖 ИИ-баланс — чат, картинки, озвучка.\n"
-            "• Тратится по факту: чат {p_chat} ₽, картинка {p_img} ₽, озвучка {p_tts} ₽/1000 знаков.\n"
-            "• Каждый день бесплатно: 3 чата и 1 картинка.\n\n"
+            "• Чат: цена считается по объёму запроса и ответа — "
+            "от {p_chat_min} до {p_chat_max} ₽ за запрос.\n"
+            "• Картинка: low {p_img_low} ₽, medium {p_img_med} ₽, high {p_img_high} ₽ — "
+            "по качеству.\n"
+            "• Озвучка: {p_tts} ₽ за 1000 знаков текста.\n"
+            "• Бесплатно: 3 чата каждый день; новым — 1 картинка, "
+            "3 озвучки и 5 голосовых задач при регистрации.\n\n"
             "🗓 Планировщик Pro — календарь и напоминания, без ИИ.\n"
             "• 99 ₽ на 30 дней; себестоимость≈0.\n"
             "• Первые 7 дней — бесплатно для всех.\n\n"
@@ -426,8 +559,7 @@ LANGS = {
         ),
         "save_balance_text": (
             "💡 Как экономить баланс:\n"
-            "• Ловите дневную бесплатную норму: {chats} чата и {images} "
-            "картинка каждый день.\n"
+            "• Ловите дневную бесплатную норму: {chats} чата каждый день.\n"
             "• Пишите вопросы коротко и по делу.\n"
             "• Озвучку включайте только когда нужно слушать.\n"
             "• Задачи и планы ведите в планировщике — он бесплатен."
@@ -439,9 +571,19 @@ LANGS = {
         "spend_image": "картинка",
         "spend_tts": "озвучка",
         "spend_voice": "голосовая задача",
+        "msg_too_long": (
+            "📏 Запрос слишком длинный ({chars} знаков).\n"
+            "Бесплатный лимит — {max} знаков. Сократите текст или "
+            "пополните баланс для запросов любой длины."
+        ),
+        "short_mode_notice": (
+            "⚡️ При балансе {balance} ₽ доступны только лаконичные ответы "
+            "(до ~{chars} знаков).\n"
+            "Если хотите развёрнутый ответ — пополните баланс."
+        ),
         "voice_tasks_limit": (
-            "🎙 Бесплатные голосовые задачи на сегодня закончились.\n\n"
-            "В день включено 5 голосовых. Доп. голосовая задача — "
+            "🎙 Бесплатные голосовые задачи закончились.\n\n"
+            "При регистрации включено 5 голосовых задач. Доп. голосовая задача — "
             "{price} ₽ с баланса. Текстом и в планировщике — без ограничений."
         ),
         "tts_locked": (
@@ -568,6 +710,10 @@ LANGS = {
         ),
         "premium": "🎙 Free voice analyses left: {free}.",
         "not_admin": "This command is available to the administrator only.",
+        "flood_warn": (
+            "⏳ You are sending messages too quickly. "
+            "Please wait a couple of seconds and try again."
+        ),
         "grant_usage": "Format: `/add_free USER_ID COUNT`",
         "grant_ok": "✅ Added attempts: {count}.",
         "grant_user": "🎁 You received extra voice analyses: +{count}.",
@@ -580,6 +726,9 @@ LANGS = {
         "cal_day_title": "📅 {date}:",
         "cal_today": "📍 Today",
         "cal_back": "⬅️ Back to calendar",
+        "cal_delete_btn": "🗑 Delete",
+        "cal_delete_confirm_title": "🗑 Delete plan?",
+        "cal_delete_confirm_body": "“{title}” will be deleted permanently. Delete it?",
         "cal_legend_new": (
             "🟢 — days with plans.\n"
             "📍 — the selected date.\n"
@@ -648,6 +797,10 @@ LANGS = {
             "⏰ Event reminders are enabled with a positive balance."
         ),
         "cal_reminder_added": "✅ Reminder added: {value}.",
+        "cal_remind_change_btn": "🔄 Change reminder",
+        "cal_remind_off_btn": "🚫 Remove reminder",
+        "cal_reminder_current": "Current reminder: {value}. Pick a new one or remove it:",
+        "evt_back": "⬅️ Back to event list",
         "cal_reminder_below": (
             "⏰ The button under a plan sets a reminder "
             "(e.g. 15 minutes or 1 hour before)."
@@ -682,7 +835,10 @@ LANGS = {
             "voice replies; quotas refresh once a day. Planner, tasks and "
             "calendar are unlimited.\n"
             "3. Paid features (chat, images, voice replies) are paid from your "
-            "balance via Telegram Stars in “💎 Balance & pay”. No auto-renewal — "
+            "balance via Telegram Stars in “💎 Balance & pay”: the chat price "
+            "depends on the size of the request and the answer, the image price "
+            "— on quality, the voice reply price — on the text length (voicing "
+            "the same text is charged once). No auto-renewal — "
             "you top up when you want.\n"
             "4. Refunds — contact support: an unused balance is refunded in full; "
             "during service outages please contact support.\n"
@@ -711,17 +867,60 @@ LANGS = {
             "Check your balance — the button below. "
             "Free features refresh once a day."
         ),
+        "free_paused": (
+            "🛡 Free features are temporarily paused (protection mode).\n"
+            "Topping up the balance will let you continue."
+        ),
+        "free_off_notice": (
+            "⛔ Free features are not enabled for your account.\n"
+            "Usage is available from your balance. Contact the admin with questions."
+        ),
+        "captcha_required": (
+            "🛡 Registration activity is high right now — confirm you are human "
+            "to receive the starter gifts.\n"
+            "The button is valid for {sec} seconds. If it expires, send /start again."
+        ),
+        "captcha_btn": "✅ I'm not a robot",
+        "captcha_toast_ok": "Confirmed!",
+        "captcha_expired": "Expired — send /start again.",
+        "captcha_done": "✅ Human verified.",
+        "captcha_granted": (
+            "✅ Thanks! Starter gifts granted: {chats} chats per day, "
+            "{img} image, {voice} voice tasks, {tts} TTS tries."
+        ),
+        "captcha_needed": (
+            "🤖 Please confirm you are not a robot: tap the "
+            "“✅ I'm not a robot” button above. If it's missing — send /start."
+        ),
+        "guard_status_on": (
+            "🛡 Protection mode: ON.\n"
+            "Free gifts and daily quotas are paused; new users get no free "
+            "allowance — only balances and Premium work.\n"
+            "Total users: {total}, new today: {today} "
+            "(daily registration cap with gifts: {cap}).\n"
+            "Flood protection: auto-stop at {burst} signups per {window}s, "
+            "captcha at {captcha} per window.\n"
+            "Turn off: /guard off"
+        ),
+        "guard_status_off": (
+            "🛡 Protection mode: OFF.\n"
+            "Free gifts and quotas work as usual.\n"
+            "Total users: {total}, new today: {today} "
+            "(daily registration cap with gifts: {cap}).\n"
+            "Flood protection: auto-stop at {burst} signups per {window}s, "
+            "captcha at {captcha} per window.\n"
+            "Turn on: /guard on"
+        ),
         "bal_open": "💰 View balance",
         "balance_text": (
             "💰 Balance\n"
             "Total: {total} RUB\n"
             "Paid: {paid} RUB\n"
             "Bonus: {bonus} RUB\n\n"
-            "🆓 Free every day (refresh once a day):\n"
-            "• Chat: {chats} of {chats_max}\n"
-            "• Images: {images} of {images_max}\n\n"
-            "🔊 Trial voice replies: {tts_free} — given once on first launch, "
-            "they do not refresh.\n\n"
+            "🆓 Free:\n"
+            "• Chat: {chats} of {chats_max} — refreshes every day.\n"
+            "• Images: {images} of {images_max} — once on registration.\n\n"
+            "🔊 Trial voice replies: {tts_free} — once on registration.\n\n"
             "Tasks and reminders — with a balance. "
             "The first 7 days the calendar and reminders are free."
         ),
@@ -736,7 +935,7 @@ LANGS = {
         "bal_back": "⬅️ Back",
         "popular": "🔥 POPULAR",
         "topup_calc_title": "💰 What a package buys you (AI balance):",
-        "topup_calc_line": "• {rub} RUB ≈ {chats} chats or {images} images",
+        "topup_calc_line": "• {rub} RUB ≈ {chats} chat requests or {images} low-quality images",
         "planner_title": (
             "🗓 Planner Pro\n\n"
             "Calendar and reminders — without AI.\n"
@@ -759,16 +958,21 @@ LANGS = {
         ),
         "free_gift_text": (
             "🎁 Free:\n"
-            "• Every day: {chats} chats and {images} image — "
-            "refreshes once a day.\n"
-            "• New users get {tts} trial voice replies.\n"
+            "• Every day: {chats} chats.\n"
+            "• New users: {images} image, {tts} trial voice replies and "
+            "{voice} voice tasks — all once on registration.\n"
             "• Planner, tasks and calendar — always free."
         ),
         "how_balance_text": (
             "ℹ️ How it works — two products:\n\n"
             "🤖 AI balance — chat, images, voice.\n"
-            "• Pay per use: chat {p_chat} RUB, image {p_img} RUB, voice {p_tts} RUB/1000 chars.\n"
-            "• Free every day: 3 chats and 1 image.\n\n"
+            "• Chat: the price depends on the size of your request and the answer — "
+            "from {p_chat_min} to {p_chat_max} RUB per request.\n"
+            "• Image: low {p_img_low} RUB, medium {p_img_med} RUB, high {p_img_high} RUB "
+            "— by quality.\n"
+            "• Voice: {p_tts} RUB per 1000 characters.\n"
+            "• Free: 3 chats every day; new users get 1 image, "
+            "3 voice replies and 5 voice tasks on registration.\n\n"
             "🗓 Planner Pro — calendar and reminders, no AI.\n"
             "• 99 RUB for 30 days; cost ≈ 0.\n"
             "• First 7 days free for everyone.\n\n"
@@ -776,8 +980,7 @@ LANGS = {
         ),
         "save_balance_text": (
             "💡 How to save your balance:\n"
-            "• Use the daily free quota: {chats} chats and {images} "
-            "image every day.\n"
+            "• Use the daily free quota: {chats} chats every day.\n"
             "• Keep questions short and to the point.\n"
             "• Turn on voice replies only when you need them.\n"
             "• Keep tasks and plans in the planner — it is free."
@@ -789,10 +992,20 @@ LANGS = {
         "spend_image": "image",
         "spend_tts": "voice reply",
         "spend_voice": "voice task",
+        "msg_too_long": (
+            "📏 The request is too long ({chars} characters).\n"
+            "The free limit is {max} characters. Shorten the text or "
+            "top up your balance for requests of any length."
+        ),
+        "short_mode_notice": (
+            "⚡️ With a {balance} RUB balance only short answers are available "
+            "(up to ~{chars} characters).\n"
+            "If you want a full answer — top up your balance."
+        ),
         "voice_tasks_limit": (
-            "🎙 Free voice tasks for today are used up.\n\n"
-            "5 voice tasks a day are included. An extra voice task costs "
-            "{price} RUB from your balance. Text and planner are unlimited."
+            "🎙 Free voice tasks are used up.\n\n"
+            "5 voice tasks are included on registration. An extra voice task "
+            "costs {price} RUB from your balance. Text and planner are unlimited."
         ),
         "tts_locked": (
             "🔇 Trial voice replies are used up. Voice replies will turn on "
@@ -964,8 +1177,8 @@ def init_db():
                 "tts_free_left": f"INTEGER DEFAULT {FREE_TTS_TRIES}",
                 "free_day": "TEXT DEFAULT ''",
                 "daily_chat_left": f"INTEGER DEFAULT {FREE_CHATS_PER_DAY}",
-                "daily_image_left": f"INTEGER DEFAULT {FREE_IMAGES_PER_DAY}",
-                "daily_voice_left": f"INTEGER DEFAULT {FREE_VOICE_TASKS_PER_DAY}",
+                "daily_image_left": f"INTEGER DEFAULT {FREE_IMAGES_ONCE}",
+                "daily_voice_left": f"INTEGER DEFAULT {FREE_VOICE_TASKS_ONCE}",
                 "show_spends": "INTEGER DEFAULT 1",
                 # Планировщик Pro: дата (ISO UTC) до которой открыт календарь
                 # и напоминания без ИИ-баланса.
@@ -981,6 +1194,9 @@ def init_db():
                 # показывалось только один раз.
                 "trial_started_at": "TEXT",
                 "calendar_free_ack": "INTEGER DEFAULT 0",
+                # Аккаунт «без бесплатки»: создан в guard-режиме или сверх
+                # дневного лимита регистраций — без подарков и дневных норм.
+                "free_off": "INTEGER DEFAULT 0",
             }
             for column, definition in migrations.items():
                 if column not in cols:
@@ -1108,6 +1324,42 @@ def init_db():
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ai_requests_ts ON ai_requests(created_at)"
+            )
+            # Кэш озвученных ответов: повторное прослушивание переотправляется
+            # по file_id без вызова TTS-API и без списаний с баланса.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tts_cache (
+                    user_id INTEGER PRIMARY KEY,
+                    answer_hash TEXT NOT NULL DEFAULT '',
+                    voice_file_id TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            # Служебные флаги бота: режим guard, запомненные вехи роста.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bot_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            # created_at: у баз, мигрированных ALTER TABLE (колонка без
+            # DEFAULT CURRENT_TIMESTAMP), проставляем время вставки триггером —
+            # иначе новые пользователи не попадают в отчёт и в дневной лимит
+            # регистраций.
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_users_created_at
+                AFTER INSERT ON users
+                WHEN NEW.created_at IS NULL
+                BEGIN
+                    UPDATE users SET created_at = CURRENT_TIMESTAMP
+                    WHERE user_id = NEW.user_id;
+                END
+                """
             )
             migrate_reminder_10_to_15(conn)
             cleanup_legacy_folders(conn)
@@ -1343,8 +1595,65 @@ def oferta_gate(message):
     return False
 
 
+# --- Антифлуд: скользящее окно на пользователя -------------------------------
+# Хранилище: uid -> список монотонных меток времени сообщений за текущее окно.
+# Записи старше окна выкидываются при каждом обращении, а простаивающие
+# пользователи удаляются целиком, поэтому словарь не растёт бесконечно
+# (в отличие от учебного примера со словарём без чистки).
+_flood_lock = threading.Lock()
+_flood_hits = {}       # uid -> [метки time.monotonic() за окно]
+_flood_warned = {}     # uid -> метка последнего предупреждения о флуде
+
+
+def flood_gate(message):
+    """True — можно обрабатывать сообщение; False — флуд (сообщение игнорируется).
+
+    Скользящее окно: не более FLOOD_MAX_EVENTS сообщений за FLOOD_WINDOW_SEC
+    секунд. При срабатывании шлётся одно предупреждение на окно, чтобы сам
+    ответ бота не превращался в флуд. Админ (ADMIN_ID) не ограничивается.
+    """
+    uid = message.from_user.id
+    if uid == ADMIN_ID:
+        return True
+    now = time.monotonic()
+    cutoff = now - FLOOD_WINDOW_SEC
+    with _flood_lock:
+        # Чистка простаивших пользователей — защита от утечки памяти.
+        stale = [u for u, hits in _flood_hits.items() if not hits or hits[-1] <= cutoff]
+        for u in stale:
+            del _flood_hits[u]
+            if u in _flood_warned:
+                del _flood_warned[u]
+        hits = _flood_hits.setdefault(uid, [])
+        # Выкидываем метки, вышедшие из скользящего окна (кроме новой).
+        hits[:] = [t for t in hits if t > cutoff]
+        hits.append(now)
+        blocked = len(hits) > FLOOD_MAX_EVENTS
+        # Предупреждаем не чаще одного раза на окно.
+        warn = False
+        if now - _flood_warned.get(uid, 0.0) >= FLOOD_WINDOW_SEC:
+            _flood_warned.pop(uid, None)
+        if blocked and uid not in _flood_warned:
+            _flood_warned[uid] = now
+            warn = True
+    if blocked:
+        logger.warning("Антифлуд: uid=%s превысил лимит %s сообщений за %s с",
+                       uid, FLOOD_MAX_EVENTS, FLOOD_WINDOW_SEC)
+        if warn:
+            try:
+                bot.reply_to(message, tr(uid, "flood_warn"))
+            except Exception:
+                logger.exception("Не удалось отправить предупреждение о флуде")
+        return False
+    return True
+
+
 def get_voice_quota(uid):
-    """(daily_voice_left, is_premium) с суточным сбросом."""
+    """(daily_voice_left, is_premium) — разовая квота при регистрации.
+
+    Квота НЕ сбрасывается ежедневно: 5 бесплатных голосовых задач
+    выдаются один раз (daily_voice_left хранит остаток).
+    """
     ensure_daily(uid)
     with db_lock:
         conn = get_db()
@@ -1377,7 +1686,8 @@ def try_consume_voice_task(uid):
             ).fetchone()
             if row and row["is_premium"]:
                 return True, "premium"
-            if row and int(row["daily_voice_left"] or 0) > 0:
+            # Guard-режим: дневная квота приостановлена — только баланс.
+            if row and int(row["daily_voice_left"] or 0) > 0 and not guard_on():
                 conn.execute(
                     "UPDATE users SET daily_voice_left = daily_voice_left - 1 WHERE user_id = ?",
                     (uid,),
@@ -1408,6 +1718,273 @@ def consume_attempt(uid):
 
 
 # ------------------------------------------------------------
+# ЗАЩИТА БЕСПЛАТКИ: режим guard, вехи роста, дневной лимит регистраций.
+# ------------------------------------------------------------
+
+def meta_get_locked(conn, key, default=""):
+    """Прочитать служебный флаг из bot_meta (вызов внутри открытого conn)."""
+    row = conn.execute("SELECT value FROM bot_meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def meta_set_locked(conn, key, value):
+    """Записать служебный флаг в bot_meta (вызов внутри открытого conn)."""
+    conn.execute(
+        "INSERT INTO bot_meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, str(value)),
+    )
+
+
+def guard_on():
+    """True — включён режим защиты: бесплатные бонусы приостановлены."""
+    with db_lock:
+        conn = get_db()
+        try:
+            return meta_get_locked(conn, "guard_mode") == "1"
+        finally:
+            conn.close()
+
+
+def set_guard(enabled):
+    """Включить/выключить режим защиты (админ-команда /guard on|off)."""
+    with db_lock:
+        conn = get_db()
+        try:
+            meta_set_locked(conn, "guard_mode", "1" if enabled else "0")
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def free_off(uid):
+    """Аккаунт без бесплатных норм: создан в guard-режиме либо сверх дневного
+    лимита регистраций. Такой пользователь работает только с баланса."""
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT free_off FROM users WHERE user_id = ?", (uid,)
+            ).fetchone()
+            return bool(row and row["free_off"])
+        finally:
+            conn.close()
+
+
+def _new_users_today_locked(conn):
+    """Сколько аккаунтов создано сегодня (UTC — как CURRENT_TIMESTAMP в БД)."""
+    since = datetime.now(timezone.utc).strftime("%Y-%m-%d 00:00:00")
+    return int(
+        conn.execute(
+            "SELECT COUNT(*) n FROM users WHERE created_at >= ?", (since,)
+        ).fetchone()["n"]
+    )
+
+
+def _apply_new_user_policy_locked(conn, uid):
+    """Политика для СВЕЖЕГО аккаунта: в guard-режиме или при превышении
+    дневного лимита регистраций — без подарков и без дневных норм (free_off=1).
+    Возвращает True, если аккаунт помечен как «без бесплатки».
+    """
+    if not guard_on() and _new_users_today_locked(conn) <= MAX_NEW_USERS_PER_DAY:
+        return False
+    conn.execute(
+        """UPDATE users SET free_off = 1,
+                  daily_chat_left = 0, daily_image_left = 0,
+                  daily_voice_left = 0, tts_free_left = 0, free_voice_left = 0
+           WHERE user_id = ?""",
+        (uid,),
+    )
+    return True
+
+
+def free_blocked_key(uid):
+    """Ключ текста отказа, когда бесплатка недоступна: guard → «пауза»,
+    капча не пройдена → «подтвердитесь», free_off → «норм нет» (навсегда),
+    иначе привычное «квоты на сегодня»."""
+    if guard_on():
+        return "free_paused"
+    if captcha_pending(uid):
+        return "captcha_needed"
+    return "free_off_notice" if free_off(uid) else "tries_limit"
+
+
+def _signups_in_window_locked(conn, window):
+    """Сколько аккаунтов создано за последние window секунд (UTC)."""
+    since = (datetime.now(timezone.utc) - timedelta(seconds=window)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    return int(
+        conn.execute(
+            "SELECT COUNT(*) n FROM users WHERE created_at >= ?", (since,)
+        ).fetchone()["n"]
+    )
+
+
+def _detect_signup_burst_locked(conn):
+    """Флуд-детект регистраций (A): превышение SIGNUP_BURST_LIMIT за окно →
+    guard включается автоматически, кулдаун капчи продлевается, админу
+    ставится флаг оповещения (отправляется снаружи, с повтором при неудаче)."""
+    if _signups_in_window_locked(conn, SIGNUP_BURST_WINDOW) <= SIGNUP_BURST_LIMIT:
+        return
+    meta_set_locked(conn, "burst_at", str(int(time.time())))
+    if meta_get_locked(conn, "guard_mode") == "1":
+        return  # guard уже включён (вручную или раньше) — лишь продлеваем кулдаун
+    meta_set_locked(conn, "guard_mode", "1")
+    meta_set_locked(conn, "burst_alert", "1")
+
+
+def _captcha_required_locked(conn):
+    """Капча «Я не робот» для НОВЫХ аккаунтов (B): всплеск выше мягкого
+    порога либо кулдаун после автостопа (SIGNUP_CAPTCHA_TTL секунд)."""
+    if _signups_in_window_locked(conn, SIGNUP_BURST_WINDOW) > SIGNUP_CAPTCHA_LIMIT:
+        return True
+    raw = meta_get_locked(conn, "burst_at", "")
+    return raw.isdigit() and int(time.time()) - int(raw) < SIGNUP_CAPTCHA_TTL
+
+
+def _fresh_signup_locked(conn, uid):
+    """Свежий ID (C-lite): True — аккаунт моложе всех ранее виденных ботом
+    (ID Telegram монотонны ⇒ «одноразовый свежесозданный»). Граница uid_hi
+    инициализируется по истории (MAX(user_id)) и после каждого новичка
+    поднимается до него — каждый следующий расходник атакующого снова «свежий».
+    При SIGNUP_FRESH_CAPTCHA=0 граница копится, но капча не ставится."""
+    raw = meta_get_locked(conn, "uid_hi", "")
+    if raw.isdigit():
+        hi = int(raw)
+    else:
+        row = conn.execute(
+            "SELECT MAX(user_id) m FROM users WHERE user_id <> ?", (uid,)
+        ).fetchone()
+        hi = int(row["m"] or 0)
+        meta_set_locked(conn, "uid_hi", str(hi))
+    if uid > hi:
+        meta_set_locked(conn, "uid_hi", str(uid))
+        return SIGNUP_FRESH_CAPTCHA
+    return False
+
+
+def _captcha_key_locked(uid):
+    return f"captcha:{uid}"
+
+
+def captcha_pending(uid):
+    """True — аккаунт ждёт нажатия «Я не робот» (токен выдан и не погашен)."""
+    with db_lock:
+        conn = get_db()
+        try:
+            return bool(meta_get_locked(conn, _captcha_key_locked(uid), ""))
+        finally:
+            conn.close()
+
+
+def _hold_for_captcha_locked(conn, uid):
+    """Заморозить подарки аккаунта до нажатия «Я не робот»: free_off + нулевые
+    квоты (как в guard), одноразовый токен в bot_meta. Возвращает nonce."""
+    nonce = os.urandom(4).hex()
+    exp = int(time.time()) + SIGNUP_CAPTCHA_TIMEOUT
+    meta_set_locked(conn, _captcha_key_locked(uid), f"{exp}:{nonce}")
+    conn.execute(
+        """UPDATE users SET free_off = 1,
+                  daily_chat_left = 0, daily_image_left = 0,
+                  daily_voice_left = 0, tts_free_left = 0, free_voice_left = 0
+           WHERE user_id = ?""",
+        (uid,),
+    )
+    return nonce
+
+
+def captcha_markup(uid, nonce):
+    """Кнопка «Я не робот»: callback rc:<uid>:<nonce>."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "captcha_btn"), callback_data=f"rc:{uid}:{nonce}"
+        )
+    )
+    return markup
+
+
+def try_send_burst_alert():
+    """Оповестить админа о всплеске. Флаг лежит в БД: guard включается до
+    отправки, поэтому при отсутствии интернета попытка повторится со
+    следующей регистрацией (как и с вехами роста)."""
+    if not ADMIN_ID:
+        return
+    with db_lock:
+        conn = get_db()
+        try:
+            if meta_get_locked(conn, "burst_alert") != "1":
+                return
+            n = _signups_in_window_locked(conn, SIGNUP_BURST_WINDOW)
+        finally:
+            conn.close()
+    try:
+        bot.send_message(
+            ADMIN_ID,
+            f"🚨 Всплеск регистраций: {n} за {SIGNUP_BURST_WINDOW} сек — "
+            f"бесплатка остановлена автоматически (guard ON).\n"
+            f"Если наплыв легальный — /guard off.\n"
+            f"Новые аккаунты ещё {SIGNUP_CAPTCHA_TTL // 60} мин подтверждают "
+            f"«Я не робот».",
+        )
+    except Exception:
+        logger.exception("Не удалось отправить оповещение о всплеске регистраций")
+        return
+    with db_lock:
+        conn = get_db()
+        try:
+            meta_set_locked(conn, "burst_alert", "0")
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def check_user_milestone():
+    """Уведомить админа при пересечении вехы роста (USER_MILESTONES).
+
+    «Пользователей стало N — пора пересмотреть условия бесплатки». Веха
+    запоминается ТОЛЬКО после успешной отправки: если интернета нет,
+    попытка повторится со следующей регистрацией.
+    """
+    if not ADMIN_ID:
+        return
+    with db_lock:
+        conn = get_db()
+        try:
+            total = int(conn.execute("SELECT COUNT(*) n FROM users").fetchone()["n"])
+            raw = meta_get_locked(conn, "user_milestone", "0") or "0"
+            try:
+                last = int(raw)
+            except ValueError:
+                last = 0
+            crossed = max(
+                (m for m in USER_MILESTONES if m > last and total >= m), default=0
+            )
+        finally:
+            conn.close()
+    if not crossed:
+        return
+    try:
+        bot.send_message(
+            ADMIN_ID,
+            f"⚠️ Пользователей: {total} — превышена веха {crossed} чел.\n"
+            f"Необходимо обновить условия бесплатных возможностей.\n"
+            f"Быстрый стоп бесплатки без деплоя: /guard on",
+        )
+    except Exception:
+        logger.exception("Не удалось отправить уведомление о вехе роста")
+        return
+    with db_lock:
+        conn = get_db()
+        try:
+            meta_set_locked(conn, "user_milestone", str(crossed))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# ------------------------------------------------------------
 # БАЛАНС ИИ: дневные бесплатные нормы, платный/бонусный баланс.
 # ------------------------------------------------------------
 
@@ -1417,18 +1994,27 @@ def ensure_daily(uid):
     with db_lock:
         conn = get_db()
         try:
-            conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            cur = conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+            if cur.rowcount:
+                # Строка только что создана — политика бесплатки:
+                # guard / дневной лимит регистраций → аккаунт без норм.
+                _apply_new_user_policy_locked(conn, uid)
             row = conn.execute(
-                "SELECT free_day FROM users WHERE user_id = ?", (uid,)
+                "SELECT free_day, free_off FROM users WHERE user_id = ?", (uid,)
             ).fetchone()
             if not row or (row["free_day"] or "") != today:
+                # Сбрасывается только дневная чат-норма. Картинки и голосовые
+                # задачи — разовые (выдаются при регистрации) и не обновляются.
+                # Guard-режим и free_off → бесплатная норма не выдаётся вовсе.
+                no_free = bool(row and row["free_off"]) or meta_get_locked(
+                    conn, "guard_mode"
+                ) == "1"
                 conn.execute(
-                    """UPDATE users SET free_day = ?, daily_chat_left = ?,
-                       daily_image_left = ?, daily_voice_left = ? WHERE user_id = ?""",
-                    (today, FREE_CHATS_PER_DAY, FREE_IMAGES_PER_DAY,
-                     FREE_VOICE_TASKS_PER_DAY, uid),
+                    "UPDATE users SET free_day = ?, daily_chat_left = ? "
+                    "WHERE user_id = ?",
+                    (today, 0 if no_free else FREE_CHATS_PER_DAY, uid),
                 )
-                conn.commit()
+            conn.commit()
         finally:
             conn.close()
 
@@ -1448,7 +2034,7 @@ def get_balance(uid):
             if not row:
                 return (
                     0.0, 0.0, FREE_TTS_TRIES,
-                    FREE_CHATS_PER_DAY, FREE_IMAGES_PER_DAY, 1,
+                    FREE_CHATS_PER_DAY, FREE_IMAGES_ONCE, 1,
                 )
             return (
                 float(row["balance_paid"] or 0),
@@ -1730,6 +2316,66 @@ def maybe_receipt(uid, amount, what_key):
         logger.exception("Не удалось отправить квитанцию о списании")
 
 
+def chat_price_rub(prompt_tokens, completion_tokens):
+    """Цена чата для пользователя: по фактическим токенам × AI_MARKUP.
+
+    Как у UnlimAI: короткий вопрос дешёвый, длинный — дороже. Цена ограничена
+    минималкой (CHAT_MIN_RUB) и потолком (CHAT_MAX_RUB), округление до копеек.
+    """
+    raw = (float(prompt_tokens or 0) / 1_000_000) * LLM_PRICE_IN_RUB
+    raw += (float(completion_tokens or 0) / 1_000_000) * LLM_PRICE_OUT_RUB
+    price = raw * AI_MARKUP
+    return round(min(max(price, CHAT_MIN_RUB), CHAT_MAX_RUB), 2)
+
+
+def image_price_rub(quality=None):
+    """Цена картинки для пользователя по качеству (по умолчанию — текущее)."""
+    return IMAGE_PRICES_RUB.get(quality or IMAGE_QUALITY, IMAGE_PRICES_RUB["low"])
+
+
+def tts_price_rub(text):
+    """Цена озвучки текста: PRICE_TTS_RUB_PER_1K за 1000 знаков (лимит TTS-модели)."""
+    return round(len(text[:3500]) / 1000 * PRICE_TTS_RUB_PER_1K, 3)
+
+
+def _tts_answer_hash(text):
+    """Хэш озвученного ответа: повторное прослушивание того же текста бесплатно."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
+def get_tts_cache(uid):
+    """(answer_hash, voice_file_id) последней озвучки или (None, None)."""
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT answer_hash, voice_file_id FROM tts_cache WHERE user_id = ?",
+                (uid,),
+            ).fetchone()
+            return (row["answer_hash"], row["voice_file_id"]) if row else (None, None)
+        finally:
+            conn.close()
+
+
+def set_tts_cache(uid, answer_hash, voice_file_id):
+    """Запомнить озвученный ответ: при повторе переотправим file_id без TTS-API."""
+    with db_lock:
+        conn = get_db()
+        try:
+            conn.execute(
+                """INSERT INTO tts_cache (user_id, answer_hash, voice_file_id)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                       answer_hash=excluded.answer_hash,
+                       voice_file_id=excluded.voice_file_id,
+                       updated_at=CURRENT_TIMESTAMP""",
+                (uid, answer_hash, voice_file_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def get_user_preferences(uid):
     with db_lock:
         conn = get_db()
@@ -1796,6 +2442,45 @@ def register_user(message):
     # Новому пользователю запускаем 7-дневный бесплатный доступ к календарю.
     trial_started = start_calendar_trial(uid) if is_new else False
 
+    if is_new:
+        # Порядок: флуд-детект (сам включает guard при всплеске) → политика
+        # бесплатки → капча «Я не робот»: при всплеске/кулдауне ИЛИ для свежего
+        # ID (аккаунт моложе всех виденных — одноразовый, см. _fresh_signup_locked).
+        # (Здесь, а не в ensure_daily: строка users создаётся именно при /start.)
+        with db_lock:
+            conn = get_db()
+            try:
+                _detect_signup_burst_locked(conn)
+                _apply_new_user_policy_locked(conn, uid)
+                row = conn.execute(
+                    "SELECT free_off FROM users WHERE user_id = ?", (uid,)
+                ).fetchone()
+                fresh = _fresh_signup_locked(conn, uid)
+                if not (row and row["free_off"]) and (
+                    fresh or _captcha_required_locked(conn)
+                ):
+                    _hold_for_captcha_locked(conn, uid)
+                conn.commit()
+            finally:
+                conn.close()
+        # Веха роста: «пользователей уже N — пересмотрите условия бесплатки».
+        # Уведомление уходит до запоминания вехи: при ошибке отправки
+        # (нет интернета) попытка повторится со следующей регистрацией.
+        check_user_milestone()
+        # Оповещение о всплеске: guard уже включён в БД, отправка — с повтором.
+        try_send_burst_alert()
+    else:
+        # Повторный /start при непройденной капче — продлеваем токен,
+        # чтобы кнопка снова стала действительна.
+        with db_lock:
+            conn = get_db()
+            try:
+                if meta_get_locked(conn, _captcha_key_locked(uid)):
+                    _hold_for_captcha_locked(conn, uid)
+                    conn.commit()
+            finally:
+                conn.close()
+
     if is_new and ADMIN_ID:
         try:
             bot.send_message(
@@ -1805,6 +2490,24 @@ def register_user(message):
             )
         except Exception:
             logger.exception("Не удалось уведомить администратора о регистрации")
+
+    # Капча для нового/неподтверждённого аккаунта во время всплеска.
+    with db_lock:
+        conn = get_db()
+        try:
+            raw = meta_get_locked(conn, _captcha_key_locked(uid), "")
+        finally:
+            conn.close()
+    if raw:
+        nonce = raw.partition(":")[2]
+        try:
+            bot.send_message(
+                message.chat.id,
+                tr(uid, "captcha_required", sec=SIGNUP_CAPTCHA_TIMEOUT),
+                reply_markup=captcha_markup(uid, nonce),
+            )
+        except Exception:
+            logger.exception("Не удалось отправить капчу пользователю")
 
     return trial_started
 
@@ -1885,11 +2588,8 @@ def balance_screen(uid):
         chats=chat_left,
         chats_max=FREE_CHATS_PER_DAY,
         images=image_left,
-        images_max=FREE_IMAGES_PER_DAY,
+        images_max=FREE_IMAGES_ONCE,
         tts_free=tts_free,
-        price_chat=f"{PRICE_CHAT_RUB:g}",
-        price_image=f"{PRICE_IMAGE_RUB:g}",
-        price_tts=f"{PRICE_TTS_RUB_PER_1K:g}",
     )
     spends_label = tr(uid, "bal_spends_on") if show else tr(uid, "bal_spends_off")
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -1905,11 +2605,12 @@ def balance_screen(uid):
 
 
 def _balance_calc(uid):
-    """Калькулятор: на что хватит пакета (чаты / картинки)."""
+    """Калькулятор: на что хватит пакета (чаты по типичной цене / картинки low)."""
     lines = [tr(uid, "topup_calc_title")]
+    img_low = image_price_rub("low")
     for rub, _pct in TOPUP_PACKAGES:
-        chats = int(rub // PRICE_CHAT_RUB) if PRICE_CHAT_RUB else 0
-        images = int(rub // PRICE_IMAGE_RUB) if PRICE_IMAGE_RUB else 0
+        chats = int(rub // CHAT_TYPICAL_RUB) if CHAT_TYPICAL_RUB else 0
+        images = int(rub // img_low) if img_low else 0
         lines.append(
             tr(uid, "topup_calc_line", rub=rub, chats=chats, images=images)
         )
@@ -2092,6 +2793,7 @@ def upcoming_events_text(uid):
     lines = []
     markup = types.InlineKeyboardMarkup(row_width=1)
     user_lang = get_user_lang(uid)
+    access_ok, _reason = calendar_access(uid)
 
     for row in rows:
         try:
@@ -2110,12 +2812,34 @@ def upcoming_events_text(uid):
         lines.append(tr(uid, "event_card", title=row["title"], date=date_text))
         for minutes in sorted({int(x) for x in offsets}):
             lines.append(f"   ⏰ {_offset_label(uid, minutes)}")
+        # Кнопка напоминания: поставить (нет напоминания) или изменить/убрать (есть).
+        if access_ok:
+            if offsets:
+                markup.add(
+                    types.InlineKeyboardButton(
+                        f"{tr(uid, 'cal_remind_change_btn')} {row['title'][:16]}",
+                        callback_data=f"evtpick:{row['event_id']}",
+                    )
+                )
+            else:
+                markup.add(
+                    types.InlineKeyboardButton(
+                        f"⏰ {row['title'][:24]}",
+                        callback_data=f"evtpick:{row['event_id']}",
+                    )
+                )
         markup.add(
             types.InlineKeyboardButton(
                 f"🗑 {row['title'][:30]}",
                 callback_data=f"eventdel:{row['event_id']}",
             )
         )
+
+    # Компактная навигация внизу списка: календарь и задачи всегда под рукой.
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "nav_calendar_menu"), callback_data="planner:menu_calendar"),
+        types.InlineKeyboardButton(tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"),
+    )
 
     return "\n\n".join(lines), markup
 
@@ -3114,21 +3838,11 @@ def calendar_today(call):
     _send_or_edit_calendar(call, call.from_user.id, now.year, now.month)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("calday:"))
-def calendar_open_day(call):
-    uid = call.from_user.id
-    try:
-        day = date.fromisoformat(call.data.split(":", 1)[1])
-    except ValueError:
-        bot.answer_callback_query(call.id, "Invalid date")
-        return
-
-    # Запоминаем выбранную дату: следующее наговоренное/написанное
-    # сообщение попадёт на этот день.
-    selected_cal_date[uid] = day
-
+def _build_day_card(uid, day):
+    """Текст и кнопки карточки дня: планы дня + напоминания + удаление."""
     access_ok, _reason = calendar_access(uid)
     items = _events_by_local_date(uid).get(day, [])
+    date_iso = day.isoformat()
 
     lines = [tr(uid, "cal_day_title", date=day.strftime("%d.%m.%Y"))]
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -3145,27 +3859,200 @@ def calendar_open_day(call):
             markup.add(
                 types.InlineKeyboardButton(
                     f"⏰ {title[:24]}",
-                    callback_data=f"calrem:{kind}:{item_id}",
+                    callback_data=f"calrem:{date_iso}:{kind}:{item_id}",
                 )
             )
+        if access_ok and offsets:
+            # Напоминание есть — кнопка изменения (в пикере есть «убрать»).
+            markup.add(
+                types.InlineKeyboardButton(
+                    f"{tr(uid, 'cal_remind_change_btn')} {title[:16]}",
+                    callback_data=f"calrem:{date_iso}:{kind}:{item_id}",
+                )
+            )
+        # У каждого плана — кнопка удаления (подтверждение на следующем шаге).
+        markup.add(
+            types.InlineKeyboardButton(
+                f"{tr(uid, 'cal_delete_btn')} {title[:20]}",
+                callback_data=f"caldelask:{date_iso}:{kind}:{item_id}",
+            )
+        )
 
     if not items:
         lines.append(tr(uid, "cal_day_empty"))
     elif has_add_button:
         lines.append(tr(uid, "cal_reminder_below"))
 
-    # У каждой даты одинаковая навигация: вернуться к календарю.
-    markup.add(
-        types.InlineKeyboardButton(tr(uid, "cal_back"), callback_data="planner:menu_calendar")
+    # У каждой даты одинаковая навигация: вернуться к календарю + компактный доступ.
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "cal_back"), callback_data="planner:menu_calendar"),
+        types.InlineKeyboardButton(tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"),
     )
+    return "\n".join(lines), markup
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("calday:"))
+def calendar_open_day(call):
+    uid = call.from_user.id
+    try:
+        day = date.fromisoformat(call.data.split(":", 1)[1])
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid date")
+        return
+
+    # Запоминаем выбранную дату: следующее наговоренное/написанное
+    # сообщение попадёт на этот день.
+    selected_cal_date[uid] = day
 
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "\n".join(lines), reply_markup=markup)
+    text, markup = _build_day_card(uid, day)
+    bot.send_message(call.message.chat.id, text, reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "calnoop")
 def calendar_noop(call):
     bot.answer_callback_query(call.id)
+
+
+def _plan_title(uid, kind, item_id):
+    """Название события/задачи для подтверждения удаления или None."""
+    if kind == "event":
+        table, id_col, title_col = "events", "event_id", "title"
+    elif kind == "task":
+        table, id_col, title_col = "tasks", "task_id", "task_text"
+    else:
+        return None
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                f"SELECT {title_col} FROM {table} WHERE {id_col}=? AND user_id=?",
+                (item_id, uid),
+            ).fetchone()
+        finally:
+            conn.close()
+    return row[title_col] if row else None
+
+
+def _delete_plan(uid, kind, item_id):
+    """Удалить событие (мягко, cancelled=1) или задачу (полностью)."""
+    with db_lock:
+        conn = get_db()
+        try:
+            if kind == "event":
+                conn.execute(
+                    "UPDATE events SET cancelled=1 WHERE event_id=? AND user_id=?",
+                    (item_id, uid),
+                )
+                # Гасим напоминания удалённого события.
+                conn.execute(
+                    "UPDATE reminders SET sent=1 WHERE event_id=? AND user_id=?",
+                    (item_id, uid),
+                )
+            elif kind == "task":
+                conn.execute(
+                    "DELETE FROM tasks WHERE task_id=? AND user_id=?",
+                    (item_id, uid),
+                )
+            else:
+                return False
+            conn.commit()
+        finally:
+            conn.close()
+    return True
+
+
+def _edit_or_send(call, text, markup):
+    """Отредактировать сообщение карточки дня или отправить новое."""
+    try:
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup,
+        )
+    except Exception:
+        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("caldelask:"))
+def calendar_ask_delete(call):
+    """Кнопка «🗑 Удалить» в карточке дня: подтверждение."""
+    uid = call.from_user.id
+    parts = call.data.split(":")
+    if len(parts) != 4:
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+    _, date_iso, kind, item_id = parts
+    try:
+        day = date.fromisoformat(date_iso)
+        item_id = int(item_id)
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+    title = _plan_title(uid, kind, item_id)
+    if not title:
+        bot.answer_callback_query(call.id, "Plan not found")
+        return
+
+    bot.answer_callback_query(call.id)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "task_delete_yes"),
+            callback_data=f"caldelyes:{date_iso}:{kind}:{item_id}",
+        ),
+        types.InlineKeyboardButton(
+            tr(uid, "task_delete_no"),
+            callback_data=f"caldelno:{date_iso}",
+        ),
+    )
+    text = (
+        tr(uid, "cal_delete_confirm_title")
+        + "\n\n"
+        + tr(uid, "cal_delete_confirm_body", title=title)
+    )
+    _edit_or_send(call, text, markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("caldelyes:"))
+def calendar_do_delete(call):
+    """Подтверждение «Да, удалить»: удаляем план и показываем обновлённый день."""
+    uid = call.from_user.id
+    parts = call.data.split(":")
+    if len(parts) != 4:
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+    _, date_iso, kind, item_id = parts
+    try:
+        day = date.fromisoformat(date_iso)
+        item_id = int(item_id)
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+
+    if not _delete_plan(uid, kind, item_id):
+        bot.answer_callback_query(call.id, "Plan not found")
+        return
+
+    bot.answer_callback_query(call.id, "🗑 Удалено" if get_user_lang(uid) == "ru" else "🗑 Deleted")
+    selected_cal_date[uid] = day
+    text, markup = _build_day_card(uid, day)
+    _edit_or_send(call, text, markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("caldelno:"))
+def calendar_cancel_delete(call):
+    """Отмена удаления — вернуть карточку дня."""
+    uid = call.from_user.id
+    try:
+        day = date.fromisoformat(call.data.split(":", 1)[1])
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid date")
+        return
+    bot.answer_callback_query(call.id)
+    text, markup = _build_day_card(uid, day)
+    _edit_or_send(call, text, markup)
 
 
 # ============================================================
@@ -3329,6 +4216,12 @@ def toggle_reminder_preference(call):
     reminder_settings_menu(call)
 
 
+def _edit_events_list(call):
+    """Перерисовать список ближайших событий тем же сообщением."""
+    text, markup = upcoming_events_text(call.from_user.id)
+    _edit_or_send(call, text, markup)
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("evtrem:"))
 def event_reminder_set(call):
     """Кнопка быстрого выбора времени напоминания для конкретного события."""
@@ -3346,18 +4239,96 @@ def event_reminder_set(call):
     if not result:
         bot.answer_callback_query(call.id, "Event not found")
         return
-    try:
-        bot.edit_message_text(
-            tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes])),
-            call.message.chat.id,
-            call.message.message_id,
-        )
-    except Exception:
-        bot.send_message(
-            call.message.chat.id,
-            tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes])),
-        )
     bot.answer_callback_query(call.id, "✅")
+    # Сразу показываем обновлённый список — напоминание видно сразу.
+    _edit_events_list(call)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("evtpick:"))
+def event_reminder_pick(call):
+    """Кнопка ⏰/🔄 в списке событий — пикер времени на месте (редактирует сообщение)."""
+    uid = call.from_user.id
+    try:
+        event_id = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid event")
+        return
+    access_ok, _reason = calendar_access(uid)
+    if not access_ok:
+        bot.answer_callback_query(call.id)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"))
+        bot.send_message(call.message.chat.id, tr(uid, "cal_reminder_free_hint"), reply_markup=markup)
+        return
+
+    # Текущее напоминание события (если есть) — показываем в пикере.
+    with db_lock:
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT reminders_json FROM events WHERE event_id=? AND user_id=?",
+                (event_id, uid),
+            ).fetchone()
+        finally:
+            conn.close()
+    offsets = []
+    if row:
+        try:
+            offsets = sorted({int(x) for x in json.loads(row["reminders_json"] or "[]")})
+        except (ValueError, TypeError, json.JSONDecodeError):
+            offsets = []
+
+    short = REMINDER_SHORT.get(get_user_lang(uid), REMINDER_SHORT["ru"])
+    lines = [tr(uid, "cal_day_pick_format")]
+    if offsets:
+        current = ", ".join(_offset_label(uid, m) for m in offsets)
+        lines.append(tr(uid, "cal_reminder_current", value=current))
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for key in REMINDER_QUICK:
+        markup.add(
+            types.InlineKeyboardButton(
+                short[key], callback_data=f"evtrem:{event_id}:{key}"
+            )
+        )
+    markup.row(
+        types.InlineKeyboardButton(
+            tr(uid, "remind_custom_btn"), callback_data=f"evtremc:{event_id}"
+        )
+    )
+    if offsets:
+        markup.row(
+            types.InlineKeyboardButton(
+                tr(uid, "cal_remind_off_btn"), callback_data=f"evtoff:{event_id}"
+            )
+        )
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "evt_back"), callback_data="evtback")
+    )
+    bot.answer_callback_query(call.id)
+    _edit_or_send(call, "\n".join(lines), markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "evtback")
+def event_reminder_back(call):
+    """Кнопка «назад» из пикера списка событий."""
+    bot.answer_callback_query(call.id)
+    _edit_events_list(call)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("evtoff:"))
+def event_reminder_off(call):
+    """Кнопка «Убрать напоминание» в списке событий."""
+    uid = call.from_user.id
+    try:
+        event_id = int(call.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        bot.answer_callback_query(call.id, "Invalid event")
+        return
+    if not _clear_plan_reminder(uid, "event", event_id):
+        bot.answer_callback_query(call.id, "Event not found")
+        return
+    bot.answer_callback_query(call.id, "🚫")
+    _edit_events_list(call)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("evtremc:"))
@@ -3367,20 +4338,16 @@ def event_reminder_custom(call):
     event_id = call.data.split(":", 1)[1]
     begin_input(uid, f"custom_reminder:{event_id}")
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, tr(uid, "remind_custom_prompt"))
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(tr(uid, "evt_back"), callback_data="evtback"))
+    bot.send_message(call.message.chat.id, tr(uid, "remind_custom_prompt"), reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("evtrems:"))
 def event_reminder_skip(call):
-    """Кнопка «Без напоминания»."""
-    uid = call.from_user.id
-    bot.answer_callback_query(call.id, "✅")
-    try:
-        bot.edit_message_text(
-            tr(uid, "remind_skipped"), call.message.chat.id, call.message.message_id
-        )
-    except Exception:
-        bot.send_message(call.message.chat.id, tr(uid, "remind_skipped"))
+    """Кнопка «Без напоминания» (легаси) — вернуть актуальный список."""
+    bot.answer_callback_query(call.id)
+    _edit_events_list(call)
 
 
 def _set_plan_reminder(uid, kind, item_id, minutes):
@@ -3396,33 +4363,129 @@ def _set_plan_reminder(uid, kind, item_id, minutes):
     return False
 
 
-def _send_calendar_reminder_picker(chat_id, uid, kind, item_id):
-    """Кнопки выбора времени напоминания из карточки дня календаря."""
+def _clear_plan_reminder(uid, kind, item_id):
+    """Убрать напоминание у события/задачи. True при успехе."""
+    try:
+        item_id = int(item_id)
+    except (TypeError, ValueError):
+        return False
+    if kind == "event":
+        with db_lock:
+            conn = get_db()
+            try:
+                changed = conn.execute(
+                    "UPDATE events SET reminders_json='[]' WHERE event_id=? AND user_id=?",
+                    (item_id, uid),
+                ).rowcount
+                # Гасим уже поставленные строки напоминаний.
+                conn.execute(
+                    "UPDATE reminders SET sent=1 WHERE event_id=? AND user_id=?",
+                    (item_id, uid),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return bool(changed)
+    if kind == "task":
+        return bool(clear_task_reminder(uid, item_id))
+    return False
+
+
+def _send_calendar_reminder_picker(call, date_iso, kind, item_id):
+    """Пикер времени напоминания — редактирует сообщение карточки дня на месте."""
+    uid = call.from_user.id
     short = REMINDER_SHORT.get(get_user_lang(uid), REMINDER_SHORT["ru"])
+    # Текущее напоминание (если есть) — показываем в заголовке пикера.
+    offsets = []
+    try:
+        items = _events_by_local_date(uid).get(date.fromisoformat(date_iso), [])
+    except ValueError:
+        items = []
+    for item in items:
+        if item[3] == kind and str(item[4]) == str(item_id):
+            offsets = item[5]
+            break
+    lines = [tr(uid, "cal_day_pick_format")]
+    if offsets:
+        current = ", ".join(_offset_label(uid, m) for m in sorted({int(x) for x in offsets}))
+        lines.append(tr(uid, "cal_reminder_current", value=current))
     markup = types.InlineKeyboardMarkup(row_width=2)
     for key in REMINDER_QUICK:
         markup.add(
             types.InlineKeyboardButton(
-                short[key], callback_data=f"calremq:{kind}:{item_id}:{key}"
+                short[key], callback_data=f"calremq:{date_iso}:{kind}:{item_id}:{key}"
             )
         )
     markup.row(
         types.InlineKeyboardButton(
-            tr(uid, "remind_custom_btn"), callback_data=f"calremc:{kind}:{item_id}"
+            tr(uid, "remind_custom_btn"), callback_data=f"calremc:{date_iso}:{kind}:{item_id}"
         )
     )
-    bot.send_message(chat_id, tr(uid, "cal_day_pick_format"), reply_markup=markup)
+    if offsets:
+        markup.row(
+            types.InlineKeyboardButton(
+                tr(uid, "cal_remind_off_btn"),
+                callback_data=f"calrmoff:{date_iso}:{kind}:{item_id}",
+            )
+        )
+    markup.row(
+        types.InlineKeyboardButton(
+            tr(uid, "cal_back"), callback_data=f"calrmback:{date_iso}"
+        )
+    )
+    _edit_or_send(call, "\n".join(lines), markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("calrmback:"))
+def calendar_reminder_back(call):
+    """Кнопка «назад» из пикера — вернуть карточку дня тем же сообщением."""
+    uid = call.from_user.id
+    try:
+        day = date.fromisoformat(call.data.split(":", 1)[1])
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid date")
+        return
+    bot.answer_callback_query(call.id)
+    text, markup = _build_day_card(uid, day)
+    _edit_or_send(call, text, markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("calrmoff:"))
+def calendar_reminder_off(call):
+    """Кнопка «Убрать напоминание» в пикере календаря."""
+    uid = call.from_user.id
+    parts = call.data.split(":")
+    if len(parts) != 4:
+        bot.answer_callback_query(call.id, "Invalid data")
+        return
+    _, date_iso, kind, item_id = parts
+    try:
+        day = date.fromisoformat(date_iso)
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid date")
+        return
+    if not _clear_plan_reminder(uid, kind, item_id):
+        bot.answer_callback_query(call.id, "Plan not found")
+        return
+    bot.answer_callback_query(call.id, "🚫")
+    text, markup = _build_day_card(uid, day)
+    _edit_or_send(call, text, markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("calrem:"))
 def calendar_add_reminder(call):
-    """Кнопка «⏰ Поставить напоминание» в карточке дня календаря."""
+    """Кнопка «⏰ Поставить/Изменить напоминание» в карточке дня календаря."""
     uid = call.from_user.id
     parts = call.data.split(":")
-    if len(parts) != 3 or parts[1] not in ("event", "task"):
+    if len(parts) != 4 or parts[2] not in ("event", "task"):
         bot.answer_callback_query(call.id, "Invalid data")
         return
-    _, kind, item_id = parts
+    _, date_iso, kind, item_id = parts
+    try:
+        date.fromisoformat(date_iso)
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid date")
+        return
     access_ok, _reason = calendar_access(uid)
     if not access_ok:
         bot.answer_callback_query(call.id)
@@ -3431,19 +4494,20 @@ def calendar_add_reminder(call):
         bot.send_message(call.message.chat.id, tr(uid, "cal_reminder_free_hint"), reply_markup=markup)
         return
     bot.answer_callback_query(call.id)
-    _send_calendar_reminder_picker(call.message.chat.id, uid, kind, item_id)
+    _send_calendar_reminder_picker(call, date_iso, kind, item_id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("calremq:"))
 def calendar_reminder_quick(call):
-    """Быстрый выбор времени напоминания из календаря."""
+    """Быстрый выбор времени напоминания из календаря (редактирует сообщение на месте)."""
     uid = call.from_user.id
     parts = call.data.split(":")
-    if len(parts) != 4:
+    if len(parts) != 5:
         bot.answer_callback_query(call.id, "Invalid data")
         return
-    _, kind, item_id, value = parts
+    _, date_iso, kind, item_id, value = parts
     try:
+        day = date.fromisoformat(date_iso)
         minutes = int(value)
     except ValueError:
         bot.answer_callback_query(call.id, "Invalid interval")
@@ -3459,7 +4523,9 @@ def calendar_reminder_quick(call):
         bot.answer_callback_query(call.id, "Plan not found")
         return
     bot.answer_callback_query(call.id, "✅")
-    bot.send_message(call.message.chat.id, tr(uid, "cal_reminder_added", value=_offset_label(uid, minutes)))
+    # Сразу показываем обновлённую карточку дня — действие видно сразу.
+    text, markup = _build_day_card(uid, day)
+    _edit_or_send(call, text, markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("calremc:"))
@@ -3467,13 +4533,26 @@ def calendar_reminder_custom(call):
     """Своё время напоминания (голосом/текстом) из карточки дня календаря."""
     uid = call.from_user.id
     parts = call.data.split(":")
-    if len(parts) != 3 or parts[1] not in ("event", "task"):
+    if len(parts) != 4 or parts[2] not in ("event", "task"):
         bot.answer_callback_query(call.id, "Invalid data")
         return
-    _, kind, item_id = parts
-    begin_input(uid, f"calrem:{kind}:{item_id}")
+    _, date_iso, kind, item_id = parts
+    try:
+        date.fromisoformat(date_iso)
+    except ValueError:
+        bot.answer_callback_query(call.id, "Invalid date")
+        return
+    begin_input(uid, f"calrem:{date_iso}:{kind}:{item_id}")
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, tr(uid, "cal_day_pick_format"))
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            tr(uid, "cal_back"), callback_data=f"calrmback:{date_iso}"
+        )
+    )
+    bot.send_message(
+        call.message.chat.id, tr(uid, "cal_day_pick_format"), reply_markup=markup
+    )
 
 
 # ============================================================
@@ -3930,8 +5009,9 @@ def send_answer(uid, text):
 
     paid, bonus, tts_free, _chat, _img, _show = get_balance(uid)
     tts_cost = round(len(text[:3500]) / 1000 * PRICE_TTS_RUB_PER_1K, 3)
-    # Бесплатная пробная озвучка имеет приоритет над балансом.
-    use_trial = tts_free > 0
+    # Бесплатная пробная озвучка имеет приоритет над балансом;
+    # в guard-режиме пробы приостановлены — только баланс.
+    use_trial = tts_free > 0 and not guard_on()
     use_paid = not use_trial and (paid + bonus) >= tts_cost
 
     if voice_enabled and TTS_API_URL and TTS_API_KEY and (use_trial or use_paid):
@@ -3966,23 +5046,6 @@ def send_answer(uid, text):
 # 10. ОБРАБОТЧИКИ ГОЛОСА И ТЕКСТА
 # ============================================================
 
-def send_reminder_picker(chat_id, uid, event_id, title):
-    """Предложить выбрать время напоминания для события (кнопки + своё время)."""
-    short = REMINDER_SHORT.get(get_user_lang(uid), REMINDER_SHORT["ru"])
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    for key in REMINDER_QUICK:
-        markup.add(
-            types.InlineKeyboardButton(short[key], callback_data=f"evtrem:{event_id}:{key}")
-        )
-    markup.row(
-        types.InlineKeyboardButton(tr(uid, "remind_custom_btn"), callback_data=f"evtremc:{event_id}")
-    )
-    markup.row(
-        types.InlineKeyboardButton(tr(uid, "remind_skip"), callback_data=f"evtrems:{event_id}")
-    )
-    bot.send_message(chat_id, tr(uid, "remind_pick", title=title), reply_markup=markup)
-
-
 def send_task_reminder_upsell(chat_id, uid, no_reminder_tasks):
     """Сообщить, что напоминания к задачам доступны при положительном балансе."""
     if not no_reminder_tasks:
@@ -3998,6 +5061,10 @@ def send_task_reminder_upsell(chat_id, uid, no_reminder_tasks):
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     uid = message.from_user.id
+    # Антифлуд — раньше любых действий: Whisper стоит денег, флуд не должен
+    # ни списывать квоты, ни занимать транскрибацию.
+    if not flood_gate(message):
+        return
     if not oferta_gate(message):
         return
     log_activity(uid)
@@ -4024,7 +5091,7 @@ def handle_voice(message):
                 user_states.pop(uid, None)
                 bot.reply_to(message, tr(uid, "cal_reminder_free_hint"), reply_markup=markup)
                 return
-            _, kind, item_id = _vstate.split(":", 2)
+            _, _date_iso, kind, item_id = _vstate.split(":", 3)
             user_states.pop(uid, None)
             if not _set_plan_reminder(uid, kind, item_id, minutes):
                 bot.reply_to(message, tr(uid, "api_error"))
@@ -4075,7 +5142,11 @@ def handle_voice(message):
     if not allowed:
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton(tr(uid, "bal_topup"), callback_data="bal:topup"))
-        bot.send_message(uid, tr(uid, "voice_tasks_limit"), reply_markup=markup)
+        bot.send_message(
+            uid,
+            tr(uid, "voice_tasks_limit", price=f"{VOICE_TASK_PRICE_RUB:g}"),
+            reply_markup=markup,
+        )
         return
 
     status = bot.reply_to(message, tr(uid, "processing"))
@@ -4111,16 +5182,21 @@ def handle_voice(message):
         follow.add(types.InlineKeyboardButton(
             tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
         ))
-        bot.send_message(message.chat.id, tr(uid, "task_added"), reply_markup=follow)
 
-        # Если создавались события — показываем актуальный календарь.
+        # Одно сообщение: подтверждение + актуальные события с кнопками
+        # напоминания/удаления. Раньше здесь был поток из 3+ сообщений.
         if counts[1]:
             events_text, events_markup = upcoming_events_text(uid)
-            bot.send_message(message.chat.id, events_text, reply_markup=events_markup)
-
-        # События без напоминания — предлагаем выбрать время (кнопками/своё).
-        for event_id, title in counts[3]:
-            send_reminder_picker(message.chat.id, uid, event_id, title)
+            if events_markup is not None:
+                bot.send_message(
+                    message.chat.id,
+                    tr(uid, "task_added") + "\n\n" + events_text,
+                    reply_markup=events_markup,
+                )
+            else:
+                bot.send_message(message.chat.id, tr(uid, "task_added"), reply_markup=follow)
+        else:
+            bot.send_message(message.chat.id, tr(uid, "task_added"), reply_markup=follow)
 
         # Напоминания к задачам недоступны без положительного баланса.
         send_task_reminder_upsell(message.chat.id, uid, counts[4])
@@ -4141,9 +5217,10 @@ def chat_answer_markup(uid, answer):
     markup = types.InlineKeyboardMarkup()
     paid, bonus, tts_free, _chat, _img, _show = get_balance(uid)
     tts_cost = round(len(answer[:3500]) / 1000 * PRICE_TTS_RUB_PER_1K, 3)
-    # Кнопка озвучки появляется только если хватает пробных попыток или баланса.
+    # Кнопка озвучки появляется только если хватает пробных попыток или баланса
+    # (в guard-режиме пробы приостановлены — кнопка только при балансе).
     can_speak = bool(TTS_API_URL and TTS_API_KEY) and (
-        tts_free > 0 or (paid + bonus) >= tts_cost
+        (tts_free > 0 and not guard_on()) or (paid + bonus) >= tts_cost
     )
     if can_speak:
         markup.add(types.InlineKeyboardButton(tr(uid, "btn_speak"), callback_data="chat:speak"))
@@ -4163,29 +5240,62 @@ def process_chat_message(chat_id, uid, text, reply_to=None):
 
     # Порядок списания: дневная бесплатная норма → баланс → отказ.
     # Легаси-Premium (старая подписка) ходит без списания.
+    # Чат пофактовый: до запроса проверяем лишь минималку (CHAT_MIN_RUB),
+    # точная цена считается по токенам ответа (chat_price_rub).
+    #
+    # Лимиты токенов — только для бесплатки (и лаконичного режима); платящие
+    # ограничиваются лишь потолком цены CHAT_MAX_RUB — они платят за токены.
+    available = round(float(paid) + float(bonus), 2)
+    # Режим защиты (/guard): дневные бесплатные квоты приостановлены для всех,
+    # кроме легаси-Premium — работают только предоплаченные балансы.
+    if guard_on() and not premium:
+        chat_left = 0
+    if not premium and chat_left > 0 and len(text) > FREE_MSG_MAX_CHARS:
+        # Бесплатный запрос длиннее лимита — честно просим сократить.
+        bot.send_message(
+            chat_id,
+            tr(uid, "msg_too_long", chars=len(text), max=FREE_MSG_MAX_CHARS),
+            reply_to_message_id=reply_to,
+            reply_markup=balance_open_markup(uid),
+        )
+        return
+
     spend_amount = 0.0
     daily_free = True
+    short_mode = False
     if premium:
-        pass
+        answer_tokens = PAID_ANSWER_MAX_TOKENS
     elif chat_left > 0:
-        pass
-    elif paid + bonus >= PRICE_CHAT_RUB:
+        answer_tokens = FREE_ANSWER_MAX_TOKENS
+    elif available >= CHAT_MIN_RUB:
         daily_free = False
-        spend_amount = PRICE_CHAT_RUB
+        # Лаконичный режим: при крошечном балансе отвечаем коротко, чтобы
+        # фактическая цена запроса не превысила остаток (без клампа).
+        short_mode = available < CHAT_SHORT_MODE_RUB
+        answer_tokens = SHORT_ANSWER_MAX_TOKENS if short_mode else PAID_ANSWER_MAX_TOKENS
     else:
         bot.send_message(
-            chat_id, tr(uid, "tries_limit"), reply_to_message_id=reply_to,
+            chat_id, tr(uid, free_blocked_key(uid)), reply_to_message_id=reply_to,
             reply_markup=balance_open_markup(uid),
         )
         return
 
     status = bot.send_message(chat_id, tr(uid, "processing"), reply_to_message_id=reply_to)
     try:
-        answer = ai_chat_reply(uid, text)
+        answer, usage = ai_chat_reply(uid, text, max_tokens=answer_tokens)
         if daily_free and not premium:
             consume_daily(uid, "chat")
         elif not daily_free:
-            spend_from_balance(uid, spend_amount)
+            price = chat_price_rub(
+                usage.get("prompt_tokens"), usage.get("completion_tokens")
+            )
+            # Ответ уже сгенерирован — списываем фактическую цену, но не
+            # больше доступного остатка (не уходим в минус, вариант «кламп»).
+            paid_now, bonus_now, *_ = get_balance(uid)
+            available = round(float(paid_now) + float(bonus_now), 2)
+            spend_amount = min(price, available)
+            if spend_amount > 0:
+                spend_from_balance(uid, spend_amount)
             maybe_receipt(uid, spend_amount, "spend_chat")
 
         # Запоминаем ответ, чтобы кнопка «Озвучить» знала, что озвучивать.
@@ -4205,6 +5315,19 @@ def process_chat_message(chat_id, uid, text, reply_to=None):
                 chunk,
                 reply_to_message_id=reply_to if start == 0 else None,
                 reply_markup=markup if start + 4000 >= len(answer) else None,
+            )
+
+        # Лаконичный режим: подсказываем, почему ответ короткий и что делать,
+        # если нужен развёрнутый (пополнить баланс).
+        if short_mode:
+            bot.send_message(
+                chat_id,
+                tr(
+                    uid,
+                    "short_mode_notice",
+                    balance=f"{available:.2f}",
+                    chars=int(SHORT_ANSWER_MAX_TOKENS * 2.5),
+                ),
             )
     except Exception:
         logger.exception("AI chat failed for user %s", uid)
@@ -4242,8 +5365,14 @@ def handle_plain_text(message):
             return
         set_event_reminder(uid, event_id_int, minutes)
         user_states.pop(uid, None)
+        # Подтверждение + кнопка «к списку»: по тапу сообщение станет
+        # актуальным списком событий с уже установленным напоминанием.
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(tr(uid, "evt_back"), callback_data="evtback"))
         bot.reply_to(
-            message, tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes]))
+            message,
+            tr(uid, "remind_done", value=format_reminder_labels(uid, [minutes])),
+            reply_markup=markup,
         )
         return
 
@@ -4281,7 +5410,7 @@ def handle_plain_text(message):
 
     # Своё время напоминания для события/задачи из календаря.
     if isinstance(state, str) and state.startswith("calrem:"):
-        _, kind, item_id = state.split(":", 2)
+        _, _date_iso, kind, item_id = state.split(":", 3)
         minutes = parse_custom_reminder(text)
         if minutes is None:
             bot.reply_to(message, tr(uid, "remind_custom_bad"))
@@ -4354,19 +5483,22 @@ def handle_plain_text(message):
         free, premium = get_user_data(uid)
         paid, bonus, tts_free, _chat, image_left, _show = get_balance(uid)
 
+        # Цена картинки — по качеству (IMAGE_QUALITY / IMAGE_PRICES_RUB).
+        img_price = image_price_rub()
+
         # Легаси-Premium (старая подписка) ходит без списания.
         spend_amount = 0.0
         daily_free = True
         if premium:
             pass
-        elif image_left > 0:
+        elif image_left > 0 and not guard_on():
             pass
-        elif paid + bonus >= PRICE_IMAGE_RUB:
+        elif paid + bonus >= img_price:
             daily_free = False
-            spend_amount = PRICE_IMAGE_RUB
+            spend_amount = img_price
         else:
             bot.reply_to(
-                message, tr(uid, "tries_limit"), reply_markup=balance_open_markup(uid)
+                message, tr(uid, free_blocked_key(uid)), reply_markup=balance_open_markup(uid)
             )
             return
 
@@ -4411,15 +5543,21 @@ def handle_plain_text(message):
         follow.add(types.InlineKeyboardButton(
             tr(uid, "btn_goto_my_tasks"), callback_data="planner:goto_folders"
         ))
-        bot.send_message(message.chat.id, tr(uid, "task_added"), reply_markup=follow)
 
+        # Одно сообщение: подтверждение + актуальные события с кнопками
+        # напоминания/удаления. Раньше здесь был поток из 3+ сообщений.
         if result.get("new_events"):
             event_text, event_markup = upcoming_events_text(uid)
-            bot.send_message(message.chat.id, event_text, reply_markup=event_markup)
-
-        # События без напоминания — предлагаем выбрать время (кнопками/своё).
-        for event_id, title in counts[3]:
-            send_reminder_picker(message.chat.id, uid, event_id, title)
+            if event_markup is not None:
+                bot.send_message(
+                    message.chat.id,
+                    tr(uid, "task_added") + "\n\n" + event_text,
+                    reply_markup=event_markup,
+                )
+            else:
+                bot.send_message(message.chat.id, tr(uid, "task_added"), reply_markup=follow)
+        else:
+            bot.send_message(message.chat.id, tr(uid, "task_added"), reply_markup=follow)
 
         # Напоминания к задачам недоступны без положительного баланса.
         send_task_reminder_upsell(message.chat.id, uid, counts[4])
@@ -4594,6 +5732,10 @@ def text_router(message):
     # Диагностика в файл: фиксируем, что текст дошёл и в каком режиме бот был,
     # чтобы при «молчании» отличить недоставку сообщения от сбоя внутри ветки.
     logger.info("text uid=%s mode=%r text=%r", uid, ui_mode(uid), text[:40])
+
+    # Антифлуд — раньше любых действий: флудящий не тратит ни квоты, ни ИИ.
+    if not flood_gate(message):
+        return
 
     # Публичная оферта должна быть принята до любых действий.
     if not oferta_gate(message):
@@ -4973,6 +6115,132 @@ def admin_stats_period(message):
 
 
 # ============================================================
+# 14а. ЗАЩИТА: /guard — стоп/пуск бесплатки без деплоя
+# ============================================================
+
+@bot.message_handler(commands=["guard"])
+def admin_guard(message):
+    """Режим защиты (только админ).
+
+    /guard — статус; /guard on — стоп бесплатки (наплыв ботов, админ не в сети);
+    /guard off — возврат к штатной работе. Пока guard включён: без подарков,
+    без дневных квот, без пробных озвучек — работают только балансы/Premium.
+    """
+    uid = message.from_user.id
+    if uid != ADMIN_ID:
+        bot.reply_to(message, tr(uid, "not_admin"))
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) > 1:
+        arg = parts[1].lower()
+        if arg in ("on", "1", "вкл", "enable"):
+            set_guard(True)
+        elif arg in ("off", "0", "выкл", "disable"):
+            set_guard(False)
+
+    enabled = guard_on()
+    with db_lock:
+        conn = get_db()
+        try:
+            total = int(conn.execute("SELECT COUNT(*) n FROM users").fetchone()["n"])
+            today = _new_users_today_locked(conn)
+        finally:
+            conn.close()
+    key = "guard_status_on" if enabled else "guard_status_off"
+    bot.reply_to(
+        message,
+        tr(
+            uid, key,
+            total=total, today=today, cap=MAX_NEW_USERS_PER_DAY,
+            burst=SIGNUP_BURST_LIMIT, window=SIGNUP_BURST_WINDOW,
+            captcha=SIGNUP_CAPTCHA_LIMIT,
+        ),
+    )
+
+
+# ============================================================
+# 14б. КАПЧА «Я не робот» ДЛЯ НОВЫХ АККАУНТОВ ВО ВРЕМЯ ВСПЛЕСКА
+# ============================================================
+
+@bot.callback_query_handler(func=lambda call: bool(call.data) and call.data.startswith("rc:"))
+def signup_captcha_pass(call):
+    """Подтверждение «Я не робот»: одноразовый токен с TTL. После нажатия
+    стартовые подарки выдаются, если guard выключен и лимит регистраций
+    не превышен; иначе аккаунт остаётся без бесплатки (как при /guard on)."""
+    uid = call.from_user.id
+    try:
+        _prefix, rc_uid, nonce = call.data.split(":", 2)
+        rc_uid_ok = int(rc_uid) == uid
+    except (ValueError, TypeError):
+        rc_uid_ok = False
+
+    granted = None  # None — токен не прошёл; True/False — результат выдачи
+    if rc_uid_ok:
+        with db_lock:
+            conn = get_db()
+            try:
+                raw = meta_get_locked(conn, _captcha_key_locked(uid), "")
+                exp_s, sep, stored = raw.partition(":")
+                if (
+                    sep
+                    and stored == nonce
+                    and exp_s.isdigit()
+                    and int(time.time()) <= int(exp_s)
+                ):
+                    meta_set_locked(conn, _captcha_key_locked(uid), "")
+                    guard = meta_get_locked(conn, "guard_mode") == "1"
+                    cap_ok = _new_users_today_locked(conn) <= MAX_NEW_USERS_PER_DAY
+                    granted = bool(not guard and cap_ok)
+                    if granted:
+                        conn.execute(
+                            """UPDATE users SET free_off = 0,
+                                      tts_free_left = ?, daily_image_left = ?,
+                                      daily_voice_left = ?, free_voice_left = ?,
+                                      free_day = ''
+                               WHERE user_id = ?""",
+                            (
+                                FREE_TTS_TRIES, FREE_IMAGES_ONCE,
+                                FREE_VOICE_TASKS_ONCE, FREE_VOICE_TASKS_ONCE, uid,
+                            ),
+                        )
+                    conn.commit()
+            finally:
+                conn.close()
+
+    if granted is None:
+        try:
+            bot.answer_callback_query(call.id, tr(uid, "captcha_expired"), show_alert=True)
+        except Exception:
+            pass
+        return
+    try:
+        bot.answer_callback_query(call.id, tr(uid, "captcha_toast_ok"))
+    except Exception:
+        pass
+    chat_id = call.message.chat.id if call.message else uid
+    if call.message:
+        try:
+            bot.edit_message_text(
+                tr(uid, "captcha_done"), chat_id, call.message.message_id
+            )
+        except Exception:
+            pass
+    if granted:
+        bot.send_message(
+            chat_id,
+            tr(
+                uid, "captcha_granted",
+                chats=FREE_CHATS_PER_DAY, img=FREE_IMAGES_ONCE,
+                voice=FREE_VOICE_TASKS_ONCE, tts=FREE_TTS_TRIES,
+            ),
+        )
+    else:
+        # guard включён либо лимит регистраций превышен — подарков нет.
+        bot.send_message(chat_id, tr(uid, free_blocked_key(uid)))
+
+
+# ============================================================
 # 15. ОПЛАТА TELEGRAM STARS
 # ============================================================
 
@@ -5100,8 +6368,12 @@ def successful_payment(message):
 # 15-bis. ИИ-ЧАТ, КАРТИНКИ И CALLBACKS НОВОГО ИНТЕРФЕЙСА
 # ============================================================
 
-def ai_chat_reply(uid, text):
-    """Ответ текстовой нейросети (модель CHAT_MODEL через OpenAI-совместимый API)."""
+def ai_chat_reply(uid, text, max_tokens=None):
+    """Ответ текстовой нейросети (модель CHAT_MODEL через OpenAI-совместимый API).
+
+    max_tokens ограничивает объём ответа: бесплатный чат — FREE_ANSWER_MAX_TOKENS,
+    платящий — PAID_ANSWER_MAX_TOKENS, лаконичный режим — SHORT_ANSWER_MAX_TOKENS.
+    """
     if get_user_lang(uid) == "en":
         system_prompt = (
             "You are a friendly assistant inside the VoicePlan Telegram bot. "
@@ -5127,7 +6399,7 @@ def ai_chat_reply(uid, text):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text},
             ],
-            "max_tokens": 1200,
+            "max_tokens": int(max_tokens or PAID_ANSWER_MAX_TOKENS),
         },
         timeout=120,
     )
@@ -5140,7 +6412,8 @@ def ai_chat_reply(uid, text):
         prompt_tokens=usage.get("prompt_tokens", 0),
         completion_tokens=usage.get("completion_tokens", 0),
     )
-    return data["choices"][0]["message"]["content"].strip()
+    # usage нужен вызывающему для пофактового расчёта цены чата.
+    return data["choices"][0]["message"]["content"].strip(), usage
 
 
 def generate_image(uid, prompt):
@@ -5156,9 +6429,8 @@ def generate_image(uid, prompt):
             "prompt": prompt,
             "n": 1,
             "size": "1024x1024",
-            # quality=low держит себестоимость предсказуемой (~1.5₽),
-            # чтобы цена 9₽ давала маржу. Можно сменить на "medium"/"high"
-            # и поднять цену, изменив PRICE_IMAGE_RUB.
+            # quality выбирает IMAGE_QUALITY; цена для пользователя и
+            # себестоимость берутся из IMAGE_PRICES_RUB / IMAGE_COSTS_RUB.
             "quality": IMAGE_QUALITY,
         },
         timeout=300,
@@ -5175,7 +6447,9 @@ def generate_image(uid, prompt):
     else:
         raise RuntimeError("В ответе images API нет ни b64_json, ни url")
 
-    log_ai_request(uid, "image", cost_rub=IMAGE_PRICE_RUB)
+    log_ai_request(
+        uid, "image", cost_rub=IMAGE_COSTS_RUB.get(IMAGE_QUALITY, 1.5)
+    )
     return raw
 
 
@@ -5226,16 +6500,33 @@ def oferta_show(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "chat:speak")
 def chat_speak(call):
-    """Кнопка «🔊 Озвучить» под ответом ИИ — присылает ответ голосом."""
+    """Кнопка «🔊 Озвучить» под ответом ИИ — присылает ответ голосом.
+
+    Первое прослушивание генерируется и оплачивается один раз; повторные
+    того же ответа переотправляются по сохранённому file_id — без вызова
+    TTS-API и без списаний (ни у пользователя, ни себестоимости у нас).
+    """
     uid = call.from_user.id
     answer = last_answer.get(uid)
     if not answer:
         bot.answer_callback_query(call.id, "Нет текста для озвучки.")
         return
 
+    # Повторное прослушивание того же ответа — бесплатно.
+    answer_hash = _tts_answer_hash(answer)
+    cached_hash, cached_file_id = get_tts_cache(uid)
+    if cached_hash == answer_hash and cached_file_id:
+        try:
+            bot.send_voice(call.message.chat.id, cached_file_id)
+            bot.answer_callback_query(call.id, "🔊")
+            return
+        except Exception:
+            logger.warning("TTS cache file_id failed for user %s — regenerating", uid)
+            set_tts_cache(uid, "", "")
+
     paid, bonus, tts_free, _chat, _img, _show = get_balance(uid)
-    tts_cost = round(len(answer[:3500]) / 1000 * PRICE_TTS_RUB_PER_1K, 3)
-    use_trial = tts_free > 0
+    tts_cost = tts_price_rub(answer)
+    use_trial = tts_free > 0 and not guard_on()
     use_paid = not use_trial and (paid + bonus) >= tts_cost
     if not (TTS_API_URL and TTS_API_KEY and (use_trial or use_paid)):
         bot.answer_callback_query(call.id, "🔇 Озвучка недоступна — нужен баланс.")
@@ -5246,7 +6537,12 @@ def chat_speak(call):
     try:
         if synthesize_speech(answer, path):
             with open(path, "rb") as audio:
-                bot.send_voice(call.message.chat.id, audio)
+                sent = bot.send_voice(call.message.chat.id, audio)
+            # Запоминаем file_id: повторные прослушивания будут бесплатными.
+            try:
+                set_tts_cache(uid, answer_hash, sent.voice.file_id)
+            except Exception:
+                logger.exception("Не удалось сохранить кэш озвучки для %s", uid)
             if use_trial:
                 consume_tts_trial(uid)
             else:
@@ -5394,8 +6690,9 @@ def bal_free(call):
             uid,
             "free_gift_text",
             chats=FREE_CHATS_PER_DAY,
-            images=FREE_IMAGES_PER_DAY,
+            images=FREE_IMAGES_ONCE,
             tts=FREE_TTS_TRIES,
+            voice=FREE_VOICE_TASKS_ONCE,
         ),
     )
 
@@ -5409,8 +6706,11 @@ def bal_how(call):
         tr(
             uid,
             "how_balance_text",
-            p_chat=f"{PRICE_CHAT_RUB:g}",
-            p_img=f"{PRICE_IMAGE_RUB:g}",
+            p_chat_min=f"{CHAT_MIN_RUB:g}",
+            p_chat_max=f"{CHAT_MAX_RUB:g}",
+            p_img_low=f"{IMAGE_PRICES_RUB['low']:g}",
+            p_img_med=f"{IMAGE_PRICES_RUB['medium']:g}",
+            p_img_high=f"{IMAGE_PRICES_RUB['high']:g}",
             p_tts=f"{PRICE_TTS_RUB_PER_1K:g}",
         ),
     )
@@ -5426,7 +6726,6 @@ def bal_save(call):
             uid,
             "save_balance_text",
             chats=FREE_CHATS_PER_DAY,
-            images=FREE_IMAGES_PER_DAY,
         ),
     )
 

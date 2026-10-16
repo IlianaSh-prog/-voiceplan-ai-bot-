@@ -95,9 +95,9 @@ check("non-admin no row created", not u)
 # 8. Текст баланса больше не содержит «Цены:».
 bal_text, _ = bot.balance_screen(ADMIN)
 check("balance text has no price line", "Цены:" not in bal_text and "цена" not in bal_text.lower())
-# 9. Озвучки явно помечены как разовые (не ежедневные).
-check("voice line says one-time", "не обновляются" in bal_text and "один раз" in bal_text)
-check("daily label separate from voice", "Бесплатно каждый день" in bal_text)
+# 9. Картинки и озвучки явно помечены как разовые при регистрации.
+check("voice line says one-time", "один раз при регистрации" in bal_text)
+check("daily label separate from voice", "обновляется каждый день" in bal_text)
 
 db("DELETE FROM users WHERE user_id=?", (ADMIN,))
 try:

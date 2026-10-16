@@ -74,8 +74,11 @@ bot.bot.reply_to = fake_reply
 bot.bot.delete_message = fake_delete
 bot.bot.edit_message_text = fake_edit
 
-# Детерминированный ИИ без сети.
-bot.ai_chat_reply = lambda uid, text: "ОТВЕТ_ИИ::" + text
+# Детерминированный ИИ без сети (пофактовый чат возвращает (ответ, usage)).
+bot.ai_chat_reply = lambda uid, text, max_tokens=None: (
+    "ОТВЕТ_ИИ::" + text,
+    {"prompt_tokens": 10, "completion_tokens": 5},
+)
 
 failures = []
 
@@ -112,6 +115,84 @@ check("daily chat quota consumed", _bal[3] < bal_before, (bal_before, "->", _bal
 # 4) Выход из чата любым режим-независимым текстом НЕ ломает ничего.
 bot.leave_mode(UID)
 check("ui_mode cleared after leave", bot.ui_mode(UID) == "", bot.ui_mode(UID))
+
+# 5) Бесплатный запрос длиннее FREE_MSG_MAX_CHARS — вежливый отказ без
+#    расхода квоты (лимиты длины/токенов только у бесплатки).
+bot.enter_mode(UID, "chat")
+with bot.db_lock:
+    conn = bot.get_db()
+    try:
+        conn.execute("UPDATE users SET daily_chat_left=3 WHERE user_id=?", (UID,))
+        conn.commit()
+    finally:
+        conn.close()
+del sent[:]
+bot.text_router(make_msg(555, UID, "а" * (bot.FREE_MSG_MAX_CHARS + 10)))
+texts = [t for _k, t in sent]
+check("too-long free message rejected", any("слишком длинный" in t for t in texts), texts)
+check("long message burns no quota", bot.get_balance(UID)[3] == 3)
+
+# 6) Лаконичный режим: квота 0, баланс ниже CHAT_SHORT_MODE_RUB → ответ
+#    доставляется, но с подсказкой «пополните баланс», баланс не в минус.
+with bot.db_lock:
+    conn = bot.get_db()
+    try:
+        conn.execute(
+            "UPDATE users SET daily_chat_left=0, balance_paid=?, balance_bonus=0 "
+            "WHERE user_id=?",
+            (bot.CHAT_SHORT_MODE_RUB - 0.2, UID),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+del sent[:]
+bot.text_router(make_msg(555, UID, "Коротко о балансе"))
+texts = [t for _k, t in sent]
+check("short mode: answer delivered", any(t.startswith("ОТВЕТ_ИИ::") for t in texts), texts)
+check("short mode: notice shown", any("лаконичные ответы" in t for t in texts), texts)
+_p, _b, *_ = bot.get_balance(UID)
+check("short mode: balance not negative", _p + _b > 0, (_p, _b))
+# 7) Режим защиты (/guard): с балансом — работает по предоплате, без баланса —
+#    отказ без вызова ИИ и без расхода квоты.
+bot.enter_mode(UID, "chat")
+with bot.db_lock:
+    conn = bot.get_db()
+    try:
+        conn.execute(
+            "UPDATE users SET balance_paid=100.0, balance_bonus=0, daily_chat_left=3 "
+            "WHERE user_id=?", (UID,))
+        conn.commit()
+    finally:
+        conn.close()
+bot.set_guard(True)
+del sent[:]
+bot.text_router(make_msg(555, UID, "Guard: вопрос с балансом"))
+texts = [t for _k, t in sent]
+bal_after = sum(bot.get_balance(UID)[:2])
+check("guard: paid user still gets AI answer",
+      any(t.startswith("ОТВЕТ_ИИ::") for t in texts), texts)
+check("guard: paid user spends balance", bal_after < 100.0, bal_after)
+
+with bot.db_lock:
+    conn = bot.get_db()
+    try:
+        conn.execute(
+            "UPDATE users SET balance_paid=0, balance_bonus=0, daily_chat_left=3 "
+            "WHERE user_id=?", (UID,))
+        conn.commit()
+    finally:
+        conn.close()
+del sent[:]
+bot.text_router(make_msg(555, UID, "Guard: вопрос без баланса"))
+texts = [t for _k, t in sent]
+check("guard: no AI call without balance",
+      not any(t.startswith("ОТВЕТ_ИИ::") for t in texts), texts)
+check("guard: paused message shown",
+      any("временно приостановлены" in t for t in texts), texts)
+check("guard: free quota untouched", bot.get_balance(UID)[3] == 3,
+      bot.get_balance(UID)[3])
+bot.set_guard(False)
+bot.leave_mode(UID)
 
 print("\n%s" % ("ALL PASS" if not failures else "FAILURES: " + ", ".join(failures)))
 raise SystemExit(1 if failures else 0)
