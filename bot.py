@@ -611,6 +611,15 @@ LANGS = {
         "btn_my_tasks": "✅ Мои задачи",
         "nav_calendar_menu": "🗓 Календарь",
         "nav_back_menu": "⬅️ Назад в меню",
+        "mt_menu_title": "📋 Мои задачи\n\nВыберите месяц:",
+        "mt_month_title": "📋 {month} {year} · записей: {count}",
+        "mt_day_header": "━━ {date} · {weekday} ━━",
+        "mt_empty_month": "📭 В этом месяце записей нет.",
+        "mt_empty_hint": "📭 Записей пока нет — добавьте план через 🗓 Календарь.",
+        "mt_page_of": "Стр. {page} из {pages}",
+        "mt_prev_page": "◀️ Пред.",
+        "mt_next_page": "▶️ Ещё",
+        "mt_back_months": "⬅️ К выбору месяца",
         "menu_returned": "🏠 Главное меню. Выберите действие на клавиатуре внизу.",
         "mytasks_hint": (
             "✍️ Наговорите или напишите свою задачу.\n\n"
@@ -1023,6 +1032,15 @@ LANGS = {
         "btn_my_tasks": "✅ My tasks",
         "nav_calendar_menu": "🗓 Calendar",
         "nav_back_menu": "⬅️ Back to menu",
+        "mt_menu_title": "📋 My tasks\n\nPick a month:",
+        "mt_month_title": "📋 {month} {year} · entries: {count}",
+        "mt_day_header": "━━ {date} · {weekday} ━━",
+        "mt_empty_month": "📭 No entries this month.",
+        "mt_empty_hint": "📭 No entries yet — add a plan via 🗓 Calendar.",
+        "mt_page_of": "Page {page} of {pages}",
+        "mt_prev_page": "◀️ Prev",
+        "mt_next_page": "▶️ More",
+        "mt_back_months": "⬅️ Back to months",
         "menu_returned": "🏠 Main menu. Choose an action on the keyboard below.",
         "mytasks_hint": (
             "✍️ Record or type your task.\n\n"
@@ -3477,6 +3495,11 @@ MONTHS = {
     ],
 }
 WEEKDAYS_HEADER = {"ru": "Пн Вт Ср Чт Пт Сб Вс", "en": "Mo Tu We Th Fr Sa Su"}
+# Полные названия дней недели для заголовков-разделителей «Моих задач».
+WEEKDAYS_FULL = {
+    "ru": ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"],
+    "en": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+}
 
 
 def format_reminder_labels(uid, offsets):
@@ -4056,6 +4079,215 @@ def calendar_cancel_delete(call):
 
 
 # ============================================================
+# 5б. «МОИ ЗАДАЧИ»: МЕСЯЦ → ДАТЫ → ДЕЛА С НАПОМИНАНИЯМИ
+# ============================================================
+
+# Запас до лимита Telegram в 4096 символа: блоки дней пакируются в страницы.
+_MT_PAGE_LIMIT = 3500
+
+
+def _my_tasks_month_rows(uid, year, month):
+    """Планы месяца по возрастанию даты: [(дата, [планы дня]), ...].
+
+    Берёт тот же источник, что и календарь: события и задачи с датой.
+    """
+    by_date = _events_by_local_date(uid)
+    return [
+        (day, by_date[day]) for day in sorted(by_date)
+        if day.year == year and day.month == month
+    ]
+
+
+def _my_tasks_day_block(uid, lang, day, items):
+    """Один день: заголовок-разделитель + дела, под каждым — своё напоминание."""
+    weekday = WEEKDAYS_FULL[lang][day.weekday()]
+    lines = [tr(uid, "mt_day_header", date=day.strftime("%d.%m"), weekday=weekday)]
+    for title, hhmm, _fire_times, kind, _item_id, offsets in items:
+        lines.append(f"{'✅' if kind == 'task' else '📌'} {title} — {hhmm}")
+        # Напоминание — сразу под своим делом и с отступом, чтобы не сливалось
+        # с соседними строками и было понятно, к какому делу оно относится.
+        for minutes in sorted({int(x) for x in offsets}):
+            lines.append(f"   ⏰ {_offset_label(uid, minutes)}")
+    return "\n".join(lines)
+
+
+def _my_tasks_picker(uid, year):
+    """Сетка месяцев года: зелёным — месяцы, в которых есть планы."""
+    lang = get_user_lang(uid)
+    by_date = _events_by_local_date(uid)
+    markup = types.InlineKeyboardMarkup(row_width=3)
+
+    for start in range(0, 12, 3):
+        row = []
+        for month in range(start + 1, start + 4):
+            count = sum(
+                len(items) for day, items in by_date.items()
+                if day.year == year and day.month == month
+            )
+            name = MONTHS[lang][month - 1]
+            label = f"🟢 {name} · {count}" if count else name
+            row.append(types.InlineKeyboardButton(
+                label, callback_data=f"mytasks:mo:{year}-{month}"
+            ))
+        markup.row(*row)
+
+    current_year = _now_in_user_tz(uid).year
+    markup.row(
+        types.InlineKeyboardButton(f"‹️ {year - 1}", callback_data=f"mytasks:yr:{year - 1}"),
+        types.InlineKeyboardButton(f"📍 {current_year}", callback_data=f"mytasks:yr:{current_year}"),
+        types.InlineKeyboardButton(f"{year + 1} ›️", callback_data=f"mytasks:yr:{year + 1}"),
+    )
+    markup.row(
+        types.InlineKeyboardButton(tr(uid, "nav_folders"), callback_data="planner:goto_folders"),
+        types.InlineKeyboardButton(tr(uid, "nav_calendar_menu"), callback_data="planner:menu_calendar"),
+    )
+    markup.add(types.InlineKeyboardButton(tr(uid, "nav_back_menu"), callback_data="planner:menu"))
+
+    text = tr(uid, "mt_menu_title")
+    if not by_date:
+        text += "\n\n" + tr(uid, "mt_empty_hint")
+    return text, markup
+
+
+def _my_tasks_month_view(uid, year, month, page=0):
+    """Список дат месяца по порядку: под каждым делом — его напоминание."""
+    lang = get_user_lang(uid)
+    month_name = MONTHS[lang][month - 1]
+    rows = _my_tasks_month_rows(uid, year, month)
+    total = sum(len(items) for _day, items in rows)
+
+    # Разбивка по дням-блокам на страницы, чтобы не упереться в лимит сообщения.
+    pages, current, size = [], [], 0
+    for row in rows:
+        block_size = len(_my_tasks_day_block(uid, lang, row[0], row[1])) + 2
+        if current and size + block_size > _MT_PAGE_LIMIT:
+            pages.append(current)
+            current, size = [], 0
+        current.append(row)
+        size += block_size
+    if current:
+        pages.append(current)
+
+    text = tr(uid, "mt_month_title", month=month_name, year=year, count=total)
+    markup = types.InlineKeyboardMarkup(row_width=3)
+
+    if not pages:
+        text += "\n\n" + tr(uid, "mt_empty_month")
+    else:
+        page = max(0, min(page, len(pages) - 1))
+        blocks = [_my_tasks_day_block(uid, lang, day, items) for day, items in pages[page]]
+        text += "\n\n" + "\n\n".join(blocks)
+        if len(pages) > 1:
+            text += "\n\n" + tr(uid, "mt_page_of", page=page + 1, pages=len(pages))
+
+        # Быстрый переход к конкретной дате — карточка дня.
+        date_buttons = [
+            types.InlineKeyboardButton(
+                f"📅 {day.day}.{day.month}", callback_data=f"calday:{day.isoformat()}"
+            )
+            for day, _items in pages[page]
+        ]
+        for start in range(0, len(date_buttons), 3):
+            markup.row(*date_buttons[start:start + 3])
+
+        if len(pages) > 1:
+            nav = []
+            if page > 0:
+                nav.append(types.InlineKeyboardButton(
+                    tr(uid, "mt_prev_page"),
+                    callback_data=f"mytasks:mo:{year}-{month}:{page - 1}",
+                ))
+            nav.append(types.InlineKeyboardButton(
+                tr(uid, "mt_page_of", page=page + 1, pages=len(pages)),
+                callback_data="mytasks:noop",
+            ))
+            if page < len(pages) - 1:
+                nav.append(types.InlineKeyboardButton(
+                    tr(uid, "mt_next_page"),
+                    callback_data=f"mytasks:mo:{year}-{month}:{page + 1}",
+                ))
+            markup.row(*nav)
+
+    # Соседние месяцы — с переходом через границу года.
+    month_index = year * 12 + (month - 1)
+    prev_y, prev_m = divmod(month_index - 1, 12)
+    next_y, next_m = divmod(month_index + 1, 12)
+    markup.row(
+        types.InlineKeyboardButton(
+            f"‹️ {MONTHS[lang][prev_m]}", callback_data=f"mytasks:mo:{prev_y}-{prev_m + 1}"
+        ),
+        types.InlineKeyboardButton(
+            f"{MONTHS[lang][next_m]} ›️", callback_data=f"mytasks:mo:{next_y}-{next_m + 1}"
+        ),
+    )
+    markup.row(
+        types.InlineKeyboardButton(
+            tr(uid, "nav_calendar_menu"), callback_data="planner:menu_calendar"
+        ),
+        types.InlineKeyboardButton(
+            tr(uid, "nav_folders"), callback_data="planner:goto_folders"
+        ),
+    )
+    markup.add(
+        types.InlineKeyboardButton(tr(uid, "mt_back_months"), callback_data="mytasks:menu")
+    )
+    return text, markup
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("mytasks:"))
+def my_tasks_router(call):
+    """«Мои задачи»: выбор месяца → список дат с делами и напоминаниями."""
+    uid = call.from_user.id
+    parts = call.data.split(":")
+    action = parts[1] if len(parts) > 1 else "menu"
+
+    # Данные календарные — доступ по тем же правилам, что и у самого календаря.
+    access_ok, _reason = calendar_access(uid)
+    if not access_ok:
+        bot.answer_callback_query(call.id)
+        _calendar_locked(call.message.chat.id, uid)
+        return
+
+    if action == "noop":
+        bot.answer_callback_query(call.id)
+        return
+
+    if action == "mo":
+        try:
+            year_s, month_s = parts[2].split("-")
+            year, month = int(year_s), int(month_s)
+            page = int(parts[3]) if len(parts) > 3 else 0
+        except (ValueError, IndexError):
+            bot.answer_callback_query(call.id, "Invalid month")
+            return
+        if not 1 <= month <= 12 or not 2000 <= year <= 2100:
+            bot.answer_callback_query(call.id, "Invalid month")
+            return
+        bot.answer_callback_query(call.id)
+        text, markup = _my_tasks_month_view(uid, year, month, page)
+        _edit_or_send(call, text, markup)
+        return
+
+    year = _now_in_user_tz(uid).year
+    if action == "yr":
+        try:
+            year = int(parts[2])
+        except (ValueError, IndexError):
+            bot.answer_callback_query(call.id, "Invalid year")
+            return
+        if not 2000 <= year <= 2100:
+            bot.answer_callback_query(call.id, "Invalid year")
+            return
+    elif action != "menu":
+        bot.answer_callback_query(call.id)
+        return
+
+    bot.answer_callback_query(call.id)
+    text, markup = _my_tasks_picker(uid, year)
+    _edit_or_send(call, text, markup)
+
+
+# ============================================================
 # 6. ЯЗЫК И НАСТРОЙКИ
 # ============================================================
 
@@ -4582,7 +4814,13 @@ def planner_router(call):
         edit_or_send(text, markup)
     elif action == "menu_tasks":
         bot.answer_callback_query(call.id)
-        text, markup = folders_view(uid)
+        # «Мои задачи» — список планов из календаря: доступ по правилам календаря.
+        access_ok, _reason = calendar_access(uid)
+        if not access_ok:
+            _calendar_locked(call.message.chat.id, uid)
+            return
+        now = _now_in_user_tz(uid)
+        text, markup = _my_tasks_picker(uid, now.year)
         edit_or_send(text, markup)
     elif action == "goto_folders":
         bot.answer_callback_query(call.id)
