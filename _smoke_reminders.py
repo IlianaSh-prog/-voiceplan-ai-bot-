@@ -67,8 +67,9 @@ rem = db("SELECT due_utc FROM reminders WHERE event_id=?", (event_id,), fetch=Tr
 check("3 reminders scheduled", len(rem) == 3)
 
 local = now.astimezone(bot.ZoneInfo("Europe/Moscow"))
-cal_text, _markup = bot.build_calendar(UID, local.year, local.month)
-check("calendar marks planned day", "•" in cal_text)
+_cal_text, cal_markup = bot.build_calendar(UID, local.year, local.month)
+check("calendar marks planned day", any(
+    "•" in b.text for r in cal_markup.keyboard for b in r))
 
 items = bot._events_by_local_date(UID).get(local.date(), [])
 check("day items carry 3 fire times", bool(items) and len(items[0][2]) == 3)

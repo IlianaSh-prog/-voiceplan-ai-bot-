@@ -54,6 +54,53 @@ check("grid has year nav", any(
 ))
 check("grid shows tap hint", "Нажмите" in cal_text or "дату" in cal_text)
 
+# Текст компактный: таблицы дат в сообщении больше нет.
+check("text has no weekday table", "Пн Вт" not in cal_text)
+check("cal_title has no month placeholder",
+      "{month}" not in bot.LANGS["ru"]["cal_title"]
+      and "{month}" not in bot.LANGS["en"]["cal_title"])
+
+# Раскладка клавиатуры: месяц → год → шапка недели → сетка дней → Сегодня/Назад.
+kb = [[(b.text, getattr(b, "callback_data", "") or "") for b in r] for r in markup.keyboard]
+m_row, y_row, w_row = kb[0], kb[1], kb[2]
+check("month row has 3 buttons", len(m_row) == 3)
+check("month center shows current month",
+      m_row[1] == (bot.MONTHS["ru"][now.month - 1], "calnoop"))
+prev_m = 12 if now.month == 1 else now.month - 1
+prev_y = now.year - 1 if now.month == 1 else now.year
+next_m = 1 if now.month == 12 else now.month + 1
+next_y = now.year + 1 if now.month == 12 else now.year
+check("month prev button labeled+aimed",
+      m_row[0] == (f"◀️ {bot.MONTHS['ru'][prev_m - 1]}",
+                   f"calnav:{prev_y:04d}-{prev_m:02d}"))
+check("month next button labeled+aimed",
+      m_row[2] == (f"{bot.MONTHS['ru'][next_m - 1]} ▶️",
+                   f"calnav:{next_y:04d}-{next_m:02d}"))
+check("year center shows current year", y_row[1] == (str(now.year), "calnoop"))
+check("year prev button labeled+aimed",
+      y_row[0] == (f"◀️ {now.year - 1}",
+                   f"calnav:{now.year - 1:04d}-{now.month:02d}"))
+check("year next button labeled+aimed",
+      y_row[2] == (f"{now.year + 1} ▶️",
+                   f"calnav:{now.year + 1:04d}-{now.month:02d}"))
+check("weekday header row in keyboard",
+      [t for t, _cb in w_row] == bot.WEEKDAYS_HEADER["ru"].split())
+flat_cbs = [cb for _r in kb for _t, cb in _r]
+check("today and back buttons present",
+      "caltoday" in flat_cbs and "planner:menu" in flat_cbs)
+
+# Граница года: декабрь уходит в январь следующего года и обратно.
+_dec_t, dec_markup = bot.build_calendar(UID, 2026, 12)
+dec_kb = [[(b.text, getattr(b, "callback_data", "") or "") for b in r]
+          for r in dec_markup.keyboard]
+check("december next is january of next year", dec_kb[0][2][1] == "calnav:2027-01")
+check("december prev is november same year", dec_kb[0][0][1] == "calnav:2026-11")
+_jan_t, jan_markup = bot.build_calendar(UID, 2027, 1)
+jan_kb = [[(b.text, getattr(b, "callback_data", "") or "") for b in r]
+          for r in jan_markup.keyboard]
+check("january prev is december of prev year", jan_kb[0][0][1] == "calnav:2026-12")
+check("january next is february same year", jan_kb[0][2][1] == "calnav:2027-02")
+
 # 2. Событие на завтра + напоминание за 15 минут.
 tomorrow = (now + timedelta(days=1)).replace(hour=15, minute=0, second=0, microsecond=0)
 data = {"new_events": [{"title": "Созвон", "local_datetime": tomorrow.isoformat(),

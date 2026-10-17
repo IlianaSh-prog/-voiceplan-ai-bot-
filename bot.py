@@ -294,7 +294,7 @@ LANGS = {
         "support": "💬 По вопросам поддержки напишите: {contact}",
         "unknown_timezone": "Не удалось распознать часовой пояс. Проверьте написание, например Europe/Moscow.",
         "confirm_event": "Событие сохранено.",
-        "cal_title": "🗓 Календарь — {month}",
+        "cal_title": "🗓 Календарь",
         "cal_legend": "• — дни с планами. Нажмите на дату, чтобы открыть её и добавить план.",
         "cal_no_dates": "В этом месяце событий нет.",
         "cal_day_title": "📅 {date}:",
@@ -729,7 +729,7 @@ LANGS = {
         "support": "💬 For support, contact: {contact}",
         "unknown_timezone": "Unknown time zone. Use a valid IANA name, for example Europe/London.",
         "confirm_event": "Event saved.",
-        "cal_title": "🗓 Calendar — {month}",
+        "cal_title": "🗓 Calendar",
         "cal_legend": "• — days with plans. Tap a date to open it and add a plan.",
         "cal_no_dates": "No events this month.",
         "cal_day_title": "📅 {date}:",
@@ -3732,27 +3732,17 @@ def _now_in_user_tz(uid):
 def build_calendar(uid, year, month):
     """Календарь месяца: кликабельная сетка дней, подсветка дней с планами.
 
-    Дни с событиями/задачами отмечаются • и выделены, любой день — кнопка
-    (можно наговорить план на выбранную дату). Плюс навигация по месяцам/годам,
-    «Сегодня» и статус пробного периода календаря.
+    Текст сообщения компактный (легенда/подсказка), без таблицы дат: месяц, год
+    и шапка недели живут в клавиатуре — строка месяцев со стрелками, строка
+    годов со стрелками, сетка дней. Любой день — кнопка (можно наговорить план).
     """
     lang = get_user_lang(uid)
     events = _events_by_local_date(uid)
     month_name = MONTHS[lang][month - 1]
     weeks = calmod.Calendar(firstweekday=0).monthdayscalendar(year, month)
-    today_local = _now_in_user_tz(uid).date()
 
-    lines = [tr(uid, "cal_title", month=f"{month_name} {year}"), ""]
-    lines.append(WEEKDAYS_HEADER[lang])
-    for week in weeks:
-        cells = []
-        for day in week:
-            if day == 0:
-                cells.append("   ")
-            else:
-                mark = "•" if date(year, month, day) in events else " "
-                cells.append(f"{day:>2}{mark}")
-        lines.append(" ".join(cells).rstrip())
+    # Компактный текст: таблицы дат в сообщении нет — месяц/год/дни в клавиатуре.
+    lines = [tr(uid, "cal_title"), ""]
 
     # Легенда: дни с планами в этом месяце.
     days_with = sorted(d for d in events if d.year == year and d.month == month)
@@ -3775,16 +3765,35 @@ def build_calendar(uid, year, month):
         lines.append(tr(uid, "cal_legend_trial", days=calendar_trial_days_left(uid)))
 
     markup = types.InlineKeyboardMarkup(row_width=7)
-    # Навигация: ◀︎ год, ◀︎ месяц, Сегодня, месяц ▶︎, год ▶︎.
+    # Строка месяцев: ◀️ предыдущий, текущий (в центре), следующий ▶️.
     prev_y, prev_m = (year - 1, 12) if month == 1 else (year, month - 1)
     next_y, next_m = (year + 1, 1) if month == 12 else (year, month + 1)
     markup.row(
-        types.InlineKeyboardButton("⇤", callback_data=f"calnav:{year - 1:04d}-{month:02d}"),
-        types.InlineKeyboardButton("⬅️", callback_data=f"calnav:{prev_y:04d}-{prev_m:02d}"),
-        types.InlineKeyboardButton(tr(uid, "cal_today"), callback_data="caltoday"),
-        types.InlineKeyboardButton("➡️", callback_data=f"calnav:{next_y:04d}-{next_m:02d}"),
-        types.InlineKeyboardButton("⇥", callback_data=f"calnav:{year + 1:04d}-{month:02d}"),
+        types.InlineKeyboardButton(
+            f"◀️ {MONTHS[lang][prev_m - 1]}",
+            callback_data=f"calnav:{prev_y:04d}-{prev_m:02d}",
+        ),
+        types.InlineKeyboardButton(month_name, callback_data="calnoop"),
+        types.InlineKeyboardButton(
+            f"{MONTHS[lang][next_m - 1]} ▶️",
+            callback_data=f"calnav:{next_y:04d}-{next_m:02d}",
+        ),
     )
+    # Строка годов: ◀️ предыдущий, текущий (в центре), следующий ▶️.
+    markup.row(
+        types.InlineKeyboardButton(
+            f"◀️ {year - 1}", callback_data=f"calnav:{year - 1:04d}-{month:02d}"
+        ),
+        types.InlineKeyboardButton(str(year), callback_data="calnoop"),
+        types.InlineKeyboardButton(
+            f"{year + 1} ▶️", callback_data=f"calnav:{year + 1:04d}-{month:02d}"
+        ),
+    )
+    # Шапка недели над сеткой дней (в сообщении таблицы больше нет).
+    markup.row(*[
+        types.InlineKeyboardButton(word, callback_data="calnoop")
+        for word in WEEKDAYS_HEADER[lang].split()
+    ])
     # Сетка дней: каждый день — кнопка, дни с планами подсвечены «•».
     for week in weeks:
         row_buttons = []
@@ -3803,8 +3812,9 @@ def build_calendar(uid, year, month):
                 )
         markup.row(*row_buttons)
 
-    # Возврат в меню раздела (единообразно с папками).
+    # «Сегодня» + возврат в меню раздела (единообразно с папками).
     markup.row(
+        types.InlineKeyboardButton(tr(uid, "cal_today"), callback_data="caltoday"),
         types.InlineKeyboardButton(tr(uid, "nav_back"), callback_data="planner:menu"),
     )
 
