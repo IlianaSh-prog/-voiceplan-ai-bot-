@@ -295,7 +295,7 @@ LANGS = {
         "unknown_timezone": "Не удалось распознать часовой пояс. Проверьте написание, например Europe/Moscow.",
         "confirm_event": "Событие сохранено.",
         "cal_title": "🗓 Календарь",
-        "cal_legend": "• — дни с планами. Нажмите на дату, чтобы открыть её и добавить план.",
+        "cal_legend": "• • — дни с задачами.",
         "cal_no_dates": "В этом месяце событий нет.",
         "cal_day_title": "📅 {date}:",
         "cal_today": "📍 Сегодня",
@@ -332,7 +332,7 @@ LANGS = {
             "Наговорите или напишите событие или задачу — и оно появится здесь."
         ),
         "cal_tap_day_hint": (
-            "👇 Нажмите на дату, чтобы открыть её и наговорить план."
+            "Нажмите на дату, чтобы записать или наговорить задачу голосом. 👇"
         ),
         "cal_day_reminders_title": "⏰ Напомнить:",
         "cal_day_add_reminder": "⏰ Поставить напоминание",
@@ -612,8 +612,8 @@ LANGS = {
         "nav_calendar_menu": "🗓 Календарь",
         "nav_back_menu": "⬅️ Назад в меню",
         "mt_menu_title": "📋 Мои задачи\n\nВыберите месяц:",
-        "mt_month_title": "📋 {month} {year} · записей: {count}",
-        "mt_day_header": "━━ {date} · {weekday} ━━",
+        "mt_month_title": "📋 <b>{month} {year}</b> · записей: {count}",
+        "mt_day_header": "━━ <b>{date}</b> · {weekday} ━━",
         "mt_empty_month": "📭 В этом месяце записей нет.",
         "mt_empty_hint": "📭 Записей пока нет — добавьте план через 🗓 Календарь.",
         "mt_page_of": "Стр. {page} из {pages}",
@@ -730,7 +730,7 @@ LANGS = {
         "unknown_timezone": "Unknown time zone. Use a valid IANA name, for example Europe/London.",
         "confirm_event": "Event saved.",
         "cal_title": "🗓 Calendar",
-        "cal_legend": "• — days with plans. Tap a date to open it and add a plan.",
+        "cal_legend": "• • — days with tasks.",
         "cal_no_dates": "No events this month.",
         "cal_day_title": "📅 {date}:",
         "cal_today": "📍 Today",
@@ -767,7 +767,7 @@ LANGS = {
             "Say or type an event or task — and it will appear here."
         ),
         "cal_tap_day_hint": (
-            "👇 Tap a date to open it and add a plan."
+            "Tap a date to write or dictate a task by voice. 👇"
         ),
         "cal_day_reminders_title": "⏰ Reminders:",
         "cal_day_add_reminder": "⏰ Set a reminder",
@@ -1033,8 +1033,8 @@ LANGS = {
         "nav_calendar_menu": "🗓 Calendar",
         "nav_back_menu": "⬅️ Back to menu",
         "mt_menu_title": "📋 My tasks\n\nPick a month:",
-        "mt_month_title": "📋 {month} {year} · entries: {count}",
-        "mt_day_header": "━━ {date} · {weekday} ━━",
+        "mt_month_title": "📋 <b>{month} {year}</b> · entries: {count}",
+        "mt_day_header": "━━ <b>{date}</b> · {weekday} ━━",
         "mt_empty_month": "📭 No entries this month.",
         "mt_empty_hint": "📭 No entries yet — add a plan via 🗓 Calendar.",
         "mt_page_of": "Page {page} of {pages}",
@@ -3742,7 +3742,10 @@ def build_calendar(uid, year, month):
     weeks = calmod.Calendar(firstweekday=0).monthdayscalendar(year, month)
 
     # Компактный текст: таблицы дат в сообщении нет — месяц/год/дни в клавиатуре.
-    lines = [tr(uid, "cal_title"), ""]
+    # Заголовок смещён к центру неразрывными пробелами (у сообщения Telegram
+    # нет собственного центрирования текста — только визуальное, через отступ)
+    # и выделен жирным (HTML parse_mode включается при отправке календаря).
+    lines = ["\u00a0" * 14 + f"<b>{tr(uid, 'cal_title')}</b>", ""]
 
     # Легенда: дни с планами в этом месяце.
     days_with = sorted(d for d in events if d.year == year and d.month == month)
@@ -3812,9 +3815,9 @@ def build_calendar(uid, year, month):
                 )
         markup.row(*row_buttons)
 
-    # «Сегодня» + возврат в меню раздела (единообразно с папками).
+    # Возврат в меню раздела. Кнопка «Сегодня» убрана: текущий месяц и так
+    # открывается по команде /calendar, отдельная кнопка ничего не добавляла.
     markup.row(
-        types.InlineKeyboardButton(tr(uid, "cal_today"), callback_data="caltoday"),
         types.InlineKeyboardButton(tr(uid, "nav_back"), callback_data="planner:menu"),
     )
 
@@ -3822,7 +3825,10 @@ def build_calendar(uid, year, month):
 
 
 def _send_or_edit_calendar(target, uid, year, month):
-    """Отправить календарь сообщением или отредактировать существующее."""
+    """Отправить календарь сообщением или отредактировать существующее.
+
+    parse_mode HTML — для жирного заголовка (<b>) в тексте календаря.
+    """
     text, markup = build_calendar(uid, year, month)
     if isinstance(target, types.CallbackQuery):
         try:
@@ -3831,12 +3837,13 @@ def _send_or_edit_calendar(target, uid, year, month):
                 target.message.chat.id,
                 target.message.message_id,
                 reply_markup=markup,
+                parse_mode="HTML",
             )
         except Exception:
             logger.exception("Не удалось обновить календарь")
         bot.answer_callback_query(target.id)
     else:
-        bot.send_message(target.chat.id, text, reply_markup=markup)
+        bot.send_message(target.chat.id, text, reply_markup=markup, parse_mode="HTML")
 
 
 @bot.message_handler(commands=["calendar"])
@@ -3995,17 +4002,22 @@ def _delete_plan(uid, kind, item_id):
     return True
 
 
-def _edit_or_send(call, text, markup):
-    """Отредактировать сообщение карточки дня или отправить новое."""
+def _edit_or_send(call, text, markup, parse_mode=None):
+    """Отредактировать сообщение карточки дня или отправить новое.
+
+    parse_mode — например "HTML" для экранов с разметкой (<b>/<i>);
+    без него текст уходит как обычный.
+    """
     try:
         bot.edit_message_text(
             text,
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup,
+            parse_mode=parse_mode,
         )
     except Exception:
-        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+        bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode=parse_mode)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("caldelask:"))
@@ -4117,7 +4129,7 @@ def _my_tasks_day_block(uid, lang, day, items):
         # Напоминание — сразу под своим делом и с отступом, чтобы не сливалось
         # с соседними строками и было понятно, к какому делу оно относится.
         for minutes in sorted({int(x) for x in offsets}):
-            lines.append(f"   ⏰ {_offset_label(uid, minutes)}")
+            lines.append(f"   ⏰ <i>{_offset_label(uid, minutes)}</i>")
     return "\n".join(lines)
 
 
@@ -4148,7 +4160,6 @@ def _my_tasks_picker(uid, year):
         types.InlineKeyboardButton(f"{year + 1} ›️", callback_data=f"mytasks:yr:{year + 1}"),
     )
     markup.row(
-        types.InlineKeyboardButton(tr(uid, "nav_folders"), callback_data="planner:goto_folders"),
         types.InlineKeyboardButton(tr(uid, "nav_calendar_menu"), callback_data="planner:menu_calendar"),
     )
     markup.add(types.InlineKeyboardButton(tr(uid, "nav_back_menu"), callback_data="planner:menu"))
@@ -4234,9 +4245,6 @@ def _my_tasks_month_view(uid, year, month, page=0):
         types.InlineKeyboardButton(
             tr(uid, "nav_calendar_menu"), callback_data="planner:menu_calendar"
         ),
-        types.InlineKeyboardButton(
-            tr(uid, "nav_folders"), callback_data="planner:goto_folders"
-        ),
     )
     markup.add(
         types.InlineKeyboardButton(tr(uid, "mt_back_months"), callback_data="mytasks:menu")
@@ -4275,7 +4283,8 @@ def my_tasks_router(call):
             return
         bot.answer_callback_query(call.id)
         text, markup = _my_tasks_month_view(uid, year, month, page)
-        _edit_or_send(call, text, markup)
+        # HTML — жирные заголовок месяца и даты, курсив у строк будильника.
+        _edit_or_send(call, text, markup, parse_mode="HTML")
         return
 
     year = _now_in_user_tz(uid).year
@@ -6835,13 +6844,14 @@ def pay_yookassa(call):
 # CALLBACKS БАЛАНСА: показ, пополнение, справки, настройки.
 # ------------------------------------------------------------
 
-def _edit_or_send(call, text, markup):
+def _edit_or_send(call, text, markup, parse_mode=None):
     try:
         bot.edit_message_text(
-            text, call.message.chat.id, call.message.message_id, reply_markup=markup
+            text, call.message.chat.id, call.message.message_id,
+            reply_markup=markup, parse_mode=parse_mode,
         )
     except Exception:
-        bot.send_message(call.message.chat.id, text, reply_markup=markup)
+        bot.send_message(call.message.chat.id, text, reply_markup=markup, parse_mode=parse_mode)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "bal:show")

@@ -85,8 +85,8 @@ check("picker has 12 months", len(month_cbs) == 12)
 check("picker month callbacks well-formed",
       all(re.fullmatch(r"mytasks:mo:\d{4}-(?:[1-9]|1[0-2])", cb) for cb in month_cbs))
 check("picker year nav", f"mytasks:yr:{year - 1}" in cbs and f"mytasks:yr:{year + 1}" in cbs)
-check("picker keeps folders+calendar+menu",
-      "planner:goto_folders" in cbs and "planner:menu_calendar" in cbs
+check("picker has calendar+menu but no folders",
+      "planner:goto_folders" not in cbs and "planner:menu_calendar" in cbs
       and "planner:menu" in cbs)
 check("planned month marked green with count",
       any(cb == f"mytasks:mo:{year}-{month}" and t.startswith("🟢") and "· 4" in t
@@ -100,11 +100,14 @@ check("picker empty hint", bot.LANGS["ru"]["mt_empty_hint"] in text2)
 t, mk = bot._my_tasks_month_view(UID, year, month)
 lines = t.split("\n")
 check("month title counts entries", "записей: 4" in t)
-headers = [ln for ln in lines if re.fullmatch(r"━━ \d{2}\.\d{2} · \S+ ━━", ln)]
+headers = [ln for ln in lines if re.fullmatch(r"━━ <b>\d{2}\.\d{2}</b> · \S+ ━━", ln)]
 check("two day headers", len(headers) == 2)
 exp_hdr1 = bot.LANGS["ru"]["mt_day_header"].format(
     date=day1.strftime("%d.%m"), weekday=bot.WEEKDAYS_FULL["ru"][day1.weekday()])
 check("header carries real weekday", exp_hdr1 in t)
+check("month title bolds month+year",
+      f"<b>{bot.MONTHS['ru'][month - 1]} {year}</b>" in t)
+check("day header bolds numeric date", f"<b>{day1.strftime('%d.%m')}</b>" in t)
 pos1, pos2 = t.find(day1.strftime("%d.%m")), t.find(day2.strftime("%d.%m"))
 check("dates ascending", 0 <= pos1 < pos2)
 
@@ -113,14 +116,16 @@ def idx(fragment):
     return next(i for i, ln in enumerate(lines) if fragment in ln)
 
 i_a = idx("Встреча с клиентом")
-check("event reminder directly under event",
-      lines[i_a + 1].startswith("   ⏰") and bot._offset_label(UID, 15) in lines[i_a + 1])
+check("event reminder directly under event and italic",
+      lines[i_a + 1].startswith("   ⏰")
+      and f"<i>{bot._offset_label(UID, 15)}</i>" in lines[i_a + 1])
 i_b = idx("Сдать отчёт")
 check("no reminder -> no ⏰ line under it", not lines[i_b + 1].startswith("   ⏰"))
 i_t = idx("Позвонить партнёру")
 check("task marked with done icon", lines[i_t].startswith("✅"))
-check("task reminder directly under task",
-      lines[i_t + 1].startswith("   ⏰") and bot._offset_label(UID, 60) in lines[i_t + 1])
+check("task reminder directly under task and italic",
+      lines[i_t + 1].startswith("   ⏰")
+      and f"<i>{bot._offset_label(UID, 60)}</i>" in lines[i_t + 1])
 
 # 6. Кнопки: даты → карточка дня, соседние месяцы, назад к месяцам.
 cbs_m = [b.callback_data for r in mk.keyboard for b in r]

@@ -41,7 +41,7 @@ def db(sql, args=(), fetch=False):
 UID = 910001
 db("INSERT INTO users (user_id, language) VALUES (?, 'ru')", (UID,))
 
-# 1. Сетка календаря: каждый день — кликабельная кнопка, дни с планами «•».
+# 1. Сетка календаря: каждый день — кликабельная кнопка, дни с задачами «*день*».
 now = datetime.now(bot.ZoneInfo("Europe/Moscow"))
 cal_text, markup = bot.build_calendar(UID, now.year, now.month)
 check("grid has day buttons", any(
@@ -86,8 +86,8 @@ check("year next button labeled+aimed",
 check("weekday header row in keyboard",
       [t for t, _cb in w_row] == bot.WEEKDAYS_HEADER["ru"].split())
 flat_cbs = [cb for _r in kb for _t, cb in _r]
-check("today and back buttons present",
-      "caltoday" in flat_cbs and "planner:menu" in flat_cbs)
+check("back button present, today button removed",
+      "caltoday" not in flat_cbs and "planner:menu" in flat_cbs)
 
 # Граница года: декабрь уходит в январь следующего года и обратно.
 _dec_t, dec_markup = bot.build_calendar(UID, 2026, 12)
